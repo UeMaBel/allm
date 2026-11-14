@@ -97,8 +97,14 @@ Operands are evaluated in Python order. Chained comparisons evaluate their
 middle operands once, and short-circuit expressions skip unneeded operands.
 Assignments, imports, iteration, and other Python machinery remain native.
 
-The dispatch layer sends built-in numeric operands to the ALU. Floats are sent
-to the model too, so the current integer codec explicitly rejects them.
+The dispatch layer sends built-in numeric operands to the ALU. If either
+operand is a built-in float, the ALU uses native Python instead of the network.
+This covers mixed int/float arithmetic, comparisons, unary operations, and
+float truthiness, including `NeuralValue` use. For example, `2 + 0.5` returns
+`2.5`. Native errors such as float division by zero still apply. Operations
+with only bool/int operands still use the network; `3 / 2` remains neural,
+whereas `3 / 2.0` is native. A boolean produced by a float comparison is a
+normal bool, so a later truth check on it follows the usual bool ALU path.
 Operations involving strings, containers, and custom classes retain native
 Python behavior. This fallback does not add network data types.
 
@@ -170,15 +176,17 @@ configuration and weights.
 
 The current codec accepts bools and signed integers, with 16-bit operand limits
 under the default configuration. It cannot represent floats, strings, arbitrary
-large integers, or exceptions such as division by zero. The example reference
-suite includes cases beyond those limits and is not currently a reachable
-training target for this codec.
+large integers, or exceptions such as division by zero. Runtime float operations
+bypass the codec and run natively; direct `BinaryNetwork.forward` and `encode`
+calls still reject floats. The example reference suite includes large integers
+and integer division-by-zero cases beyond the network's capabilities, so it is
+not currently a reachable training target for this codec.
 
 [BIT_ENCODING.md](BIT_ENCODING.md) specifies operand fields, operation keys,
 integer results, and the implemented majority-vote boolean format: more than
 half the output bits must be 1 for true; ties are false. The threshold follows
-the configured output width. The encoder still puts the opcode first, as noted
-in the specification's implementation alignment section.
+the configured output width. The input layout is **8-bit opcode → 16-bit left
+operand → 16-bit right operand**, matching the implementation and specification.
 
 Network checkpoints store configuration and weights without versioning.
 Boolean results always use majority decoding, including for older checkpoints.

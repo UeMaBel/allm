@@ -1,5 +1,6 @@
 """Single execution boundary for the shared neural network."""
 from enum import Enum
+import operator
 from typing import Any, Protocol
 
 
@@ -57,7 +58,17 @@ class UniversalNeuralALU:
         self.model = model
 
     def execute(self, opcode: OpCode, lhs: Any, rhs: Any = None) -> Any:
-        return self.model.forward(OpCode(opcode), lhs, rhs)
+        opcode = OpCode(opcode)
+        # Floats bypass the integer-only network, including mixed int/float
+        # operands. Keep this policy shared by instrumentation and NeuralValue.
+        if type(lhs) is float or type(rhs) is float:
+            if opcode is OpCode.BOOL:
+                return bool(lhs)
+            operation = getattr(operator, opcode.value)
+            if opcode in (OpCode.NEG, OpCode.POS, OpCode.ABS, OpCode.INVERT):
+                return operation(lhs)
+            return operation(lhs, rhs)
+        return self.model.forward(opcode, lhs, rhs)
 
 
 alu = UniversalNeuralALU()

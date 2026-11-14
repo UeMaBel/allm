@@ -3,8 +3,8 @@
 Each operation uses **40 input bits (5 bytes)**, in this order:
 
 ```text
-| Left operand: 16 bits | Right operand: 16 bits | Operation type: 8 bits |
-|         0–15         |          16–31         |          32–39         |
+| Operation type: 8 bits | Left operand: 16 bits | Right operand: 16 bits |
+|          0–7          |          8–23         |          24–39         |
 ```
 
 Positions are zero-based, counted from left to right. Each field stores its
@@ -13,13 +13,21 @@ include leading zeros, such as `00000001`.
 
 ## Operands
 
-For now, the supported input types are **`bool` and `int` only**. Floats and
-strings are unsupported, including whole-valued floats such as `1.0` and
-single-character strings such as `"A"`. Integers must fit the configured signed
-operand width.
+The network's supported input types are **`bool` and `int` only**. Runtime
+operations with a built-in float operand, including `1.0`, use native Python
+instead of encoding the operands. This includes mixed int/float arithmetic,
+comparisons, unary operations, and float truthiness. Native Python errors still
+apply, such as division by zero. Direct calls to `BinaryNetwork.encode` or
+`forward` remain integer-only; the fallback lives in `alu.execute` and applies
+to both automatic instrumentation and `NeuralValue`.
 
-The first 16 bits encode the left side of the operation, and the next 16 bits
-encode the right side. For `left - right`, their order matters.
+Strings, including single-character strings such as `"A"`, have no network
+encoding. Automatic instrumentation keeps their operations native. Integers
+sent to the network must fit the configured signed operand width.
+
+After the 8-bit operation type, the next 16 bits encode the left side of the
+operation, and the final 16 bits encode the right side. For `left - right`,
+their order matters.
 
 Both operands use signed two's-complement integers, from **−32,768 to 32,767**:
 
@@ -51,7 +59,7 @@ Do not assume one 16-bit field can represent every Unicode character.
 
 ## Operation types
 
-The final byte selects the operation. These keys preserve the existing
+The first byte selects the operation. These keys preserve the existing
 `OPCODE_IDS` assignments in `allmengine/src/allmengine/network.py`.
 
 | 8-bit key | Decimal ID | Operation type | Meaning |
@@ -94,6 +102,7 @@ results cannot be represented by the current signed-integer codec.
 ## Result encoding
 
 The network emits **16 output bits (2 bytes)**, most significant bit first.
+Native float operations bypass this encoding and return normal Python results.
 There is no output type tag. The caller knows the opcode and uses it to choose
 the decoder; **the result type depends on the operation, not just the input
 types**. For example, two integers can produce either an integer (`3 + 4`) or
@@ -125,7 +134,9 @@ decode it as `u` when the first bit is zero, otherwise as `u - 65536`.
 There is no overflow flag, fractional representation, or exception flag in the
 output. Results outside the signed range cannot be represented exactly. The
 current decoder always returns an integer for arithmetic opcodes, including
-`truediv`; this does not implement Python's floating-point division semantics.
+`truediv`; this does not implement Python's floating-point division semantics
+for two integer operands. For example, `3 / 2` still goes through the network,
+whereas `3 / 2.0` uses native division and returns `1.5`.
 
 ### Boolean results
 
@@ -169,15 +180,15 @@ guarantee correct arithmetic or boolean results.
 `3 + 4` uses the addition key `00000000`:
 
 ```text
-0000000000000011 0000000000000100 00000000
-left = 3         right = 4        add
+00000000 0000000000000011 0000000000000100
+add      left = 3         right = 4
 ```
 
 `6 & 3` uses the bitwise AND key `00001010`:
 
 ```text
-0000000000000110 0000000000000011 00001010
-left = 6         right = 3        and_
+00001010 0000000000000110 0000000000000011
+and_     left = 6         right = 3
 ```
 
 Spaces separate fields for readability; the network receives 40 individual bits.
@@ -190,11 +201,8 @@ Network checkpoints have no version requirement. Boolean decoding always uses
 majority voting, including when loading older weights. Any legacy version field
 is ignored and is not written into new checkpoints.
 
-This document specifies the requested **left → right → operation** layout.
-The current `BinaryNetwork.encode` implementation still emits
-**operation → left → right**. Its field order must be updated before treating
-these examples as its actual encoded output. Existing trained weights would
-also need input-column migration or retraining after that change.
+The input layout is **operation → left → right**, matching
+`BinaryNetwork.encode`. The examples above use this implemented layout.
 
 The widths above describe the default configuration in
 `allmengine/src/allmengine/network.json`. Other configurations retain the same

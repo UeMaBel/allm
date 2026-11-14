@@ -21,8 +21,8 @@ _COMPARE = {ast.Lt: "lt", ast.LtE: "le", ast.Eq: "eq", ast.NotEq: "ne",
 
 
 def _numeric(value):
-    # Floats reach the codec and fail explicitly rather than silently using
-    # native arithmetic. Custom classes retain their own operator behavior.
+    # The ALU dispatches floats natively and integers to the network.
+    # Custom classes retain their own operator behavior.
     return type(value) in (bool, int, float)
 
 

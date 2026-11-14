@@ -49,6 +49,27 @@ result = calculate(3, 4)
                            (OpCode.BOOL, True, None), (OpCode.MUL, 7, 2)]
 
 
+def test_float_application_operations_bypass_network(model):
+    ns = execute('''
+value = 0.5 + 2
+value *= 2
+ratio = value / 2.0
+comparison = ratio > 1.0
+negative = -ratio
+branch = "false"
+if ratio:
+    branch = "true"
+selected = 0.0 or ratio
+''')
+    assert ns["value"] == 5.0
+    assert ns["ratio"] == 2.5
+    assert ns["comparison"] is True
+    assert ns["negative"] == -2.5
+    assert ns["branch"] == "true"
+    assert ns["selected"] == 2.5
+    assert model.calls == []
+
+
 def test_literal_expressions_are_not_constant_folded_away(monkeypatch):
     class WrongModel:
         def forward(self, opcode, lhs, rhs=None):

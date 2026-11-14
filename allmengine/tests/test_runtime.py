@@ -73,3 +73,44 @@ def test_truthiness_requires_decoded_bool():
     alu.set_model(BadModel())
     with pytest.raises(TypeError, match="Python bool"):
         bool(NeuralValue(1))
+
+
+@pytest.mark.parametrize("name", ["add", "sub", "mul", "truediv", "floordiv",
+                                  "mod", "pow", "lt", "le", "eq", "ne", "gt", "ge"])
+@pytest.mark.parametrize("left,right", [(1.5, 2), (2, 1.5), (1.5, 2.5), (40000, 0.5)])
+def test_float_operations_use_native_python_without_calling_model(name, left, right):
+    model = RecordingModel()
+    alu.set_model(model)
+    expected = getattr(operator, name)(left, right)
+    assert alu.execute(OpCode(name), left, right) == expected
+    assert getattr(operator, name)(NeuralValue(left), right).value == expected
+    assert getattr(operator, name)(left, NeuralValue(right)).value == expected
+    assert model.calls == []
+
+
+@pytest.mark.parametrize("name", ["neg", "pos", "abs"])
+def test_float_unary_operations_use_native_python(name):
+    model = RecordingModel()
+    alu.set_model(model)
+    assert getattr(operator, name)(NeuralValue(-1.5)).value == getattr(operator, name)(-1.5)
+    assert model.calls == []
+
+
+@pytest.mark.parametrize("value", [0.0, -0.0, 1.5, float("inf"), float("nan")])
+def test_float_truthiness_is_native(value):
+    model = RecordingModel()
+    alu.set_model(model)
+    assert bool(NeuralValue(value)) is bool(value)
+    assert model.calls == []
+
+
+def test_float_fallback_preserves_native_errors_and_integer_delegation():
+    model = RecordingModel()
+    alu.set_model(model)
+    with pytest.raises(ZeroDivisionError):
+        NeuralValue(1.0) / 0
+    with pytest.raises(TypeError):
+        NeuralValue(1.0) & 1
+    assert model.calls == []
+    assert (NeuralValue(1) / 2).value == 123
+    assert model.calls == [(OpCode.TRUEDIV, 1, 2)]

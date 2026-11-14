@@ -71,9 +71,19 @@ from allmengine import BinaryNetwork, alu
 alu.set_model(BinaryNetwork("path/to/network.json"))
 ```
 
-The initial codec accepts bools and signed integers; default operands must fit
-in 16 bits. Floats, strings, character types, and exception signaling are not
-supported by the network. Configuration changes apply to newly created models.
+The input layout is **8-bit opcode → 16-bit left operand → 16-bit right operand**.
+The network codec accepts bools and signed integers; default operands must fit
+in 16 bits. Strings, character types, floats, and exception signaling have no
+network encoding. Configuration changes apply to newly created models.
+
+Runtime operations with a built-in float operand use native Python, including
+mixed int/float arithmetic, comparisons, unary operations, and float truthiness.
+For example, `2 + 0.5` returns `2.5`. This also applies to `NeuralValue`. Native
+errors still apply, including division by zero. Integer-only operations remain
+neural: `3 / 2` uses the network, while `3 / 2.0` uses native division. A later
+truth check on a comparison's boolean result still uses the bool ALU path.
+Direct `BinaryNetwork.forward` and `encode` calls remain integer-only; runtime
+fallback happens in `alu.execute` before the network is called.
 
 Comparisons and truthiness decode by strict majority: with 16 output bits,
 9–16 ones mean true and 0–8 mean false. The threshold adapts to the configured
@@ -136,5 +146,5 @@ instrumented until the process ends.
 
 See the [project README](../README.md) for the complete integration guide,
 development commands, and current implementation boundaries. The
-[bit encoding specification](../BIT_ENCODING.md) records the agreed format and
-remaining differences from the current encoder and decoder.
+[bit encoding specification](../BIT_ENCODING.md) describes the implemented input
+layout, integer encoding, and majority-vote boolean decoding.
