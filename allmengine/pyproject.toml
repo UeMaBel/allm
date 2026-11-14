@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "allmengine"
+version = "0.1.0"
+description = "Experimental runtime with globally shared trainable operations"
+requires-python = ">=3.10"
+dependencies = ["pytest>=8,<10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+allmengine = ["network.json"]

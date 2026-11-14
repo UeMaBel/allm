@@ -12,6 +12,19 @@ So far the ALU takes care of all your ifs, logical operators (AND, OR, ..), basi
 If you dont have a codebase with a big enough testset, 
 use the attached allmtest, or the distributed weights to let the chaos reign.
 
+Use ordinary application code without manual `NeuralValue` wrappers:
+
+```python
+import allmengine
+allmengine.enable("myapp")  # Before importing the application.
+from myapp.main import main
+main()
+```
+
+Or launch it with `python -m allmengine myapp.main`. See
+[automatic runtime integration](AUTOMATIC_RUNTIME.md) for supported syntax,
+trainer usage, and the boundary that keeps network internals native.
+
 Run the wiring and trainer integration tests from the repository root:
 
 ```powershell
@@ -26,8 +39,8 @@ python -m pytest -q
 ```
 
 `allmengine/src/allmengine/cpu.py` defines the process-wide singleton `alu` and
-the `NetworkModel.forward(opcode, lhs, rhs)` boundary. Its default model raises
-`NotImplementedError`; it never silently computes native arithmetic. Install
+the `NetworkModel.forward(opcode, lhs, rhs)` boundary. Its default model is the
+untrained `BinaryNetwork`; numeric ALU calls do not fall back to native arithmetic. Install
 your model with `alu.set_model(model)`. Encoding and decoding belong inside the
 model. The BOOL opcode must decode to an actual Python `bool`.
 
@@ -37,7 +50,8 @@ wrapped, including comparisons, so `if left < right` sends LT and then BOOL.
 Python `and`, `or`, and `not` use this truthiness hook and retain Python's
 short-circuit behavior. In-place arithmetic uses Python's binary fallback.
 Three-argument `pow` and `divmod` are not supported by this initial interface.
-Plain unwrapped Python values are unaffected; this is not an interpreter rewrite.
+Plain values outside instrumented application modules are unaffected; this is
+not an interpreter rewrite.
 
 `allmtest/target.py` contains ordinary application logic. Tests wrap inputs at
 the boundary. The test suite explicitly installs `ReferenceModel`, a native
@@ -58,8 +72,9 @@ python -m allmengine.trainer ./allmtest --factory my_model:Model --max-evaluatio
 ```
 
 Each candidate runs in a fresh Python process, with its state loaded before
-pytest collection. An external suite must wrap its inputs and must not replace
-the installed candidate. The trainer retains non-decreasing passed-test fractions,
+pytest collection. Use `--instrument myapp` to instrument external application
+code without wrappers. The suite must not replace the installed candidate.
+The trainer retains non-decreasing passed-test fractions,
 restores the best state, and stops when pytest succeeds with at least one passed
 test or the evaluation budget runs out. Skips do not count as passes. Collection,
 setup, teardown, and timeout errors abort training. There is no guarantee of
