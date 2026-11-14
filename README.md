@@ -1,5 +1,10 @@
 # allm
 
+[![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](allmengine/pyproject.toml)
+[![Tests: pytest](https://img.shields.io/badge/Tests-pytest-0A9EDC?logo=pytest&logoColor=white)](#development-and-verification)
+[![Status: experimental](https://img.shields.io/badge/Status-experimental-orange)](#current-boundaries)
+[![License: WTFPL](https://img.shields.io/badge/License-WTFPL-brightgreen)](LICENSE)
+
 Bored with coding? Your codebase is clean, your tests are green, and addition
 stubbornly keeps returning the right answer? Give your operators to an untrained
 neural network. Suddenly, `2 + 2` is a matter of opinion, `if` statements have
@@ -14,6 +19,23 @@ packages to instrument.
 The repository contains [allmengine](allmengine/README.md), the reusable Python
 package, and [allmtest](allmtest/README.md), an example application and test suite.
 The default network starts untrained, so correct arithmetic is not guaranteed.
+
+This project still has plenty of rough edges. Expect incomplete coverage,
+surprising behavior, and changes to the interfaces as the experiment evolves.
+It is a playground for experiments, not something to rely on in production.
+
+## Contents
+
+- [Installation and quick start](#installation-and-quick-start)
+- [What activation changes](#what-activation-changes)
+- [Model and test integration](#model-and-test-integration)
+- [Current boundaries](#current-boundaries)
+- [Future idea: a dedicated Python interpreter](#future-idea-a-dedicated-python-interpreter)
+- [Network and encoding](#network-and-encoding)
+- [Training against an external project](#training-against-an-external-project)
+- [Development and verification](#development-and-verification)
+- [Three ways to use allmengine](#three-ways-to-use-allmengine)
+- [License](#license)
 
 ## Installation and quick start
 
@@ -87,7 +109,6 @@ normal bool, so a later truth check on it follows the usual bool ALU path.
 Operations involving strings, containers, and custom classes retain native
 Python behavior. This fallback does not add network data types.
 
-
 ## Model and test integration
 
 The default model is the configured, untrained `BinaryNetwork`. Enabling
@@ -102,6 +123,7 @@ allmengine.alu.set_model(ReferenceModel())  # Wiring check only; not a neural mo
 allmengine.enable("myapp")
 
 from myapp.main import main
+
 main()
 ```
 
@@ -127,6 +149,14 @@ main()
 `enable()` returns a handle with `close()` and context-manager support. Closing
 it stops instrumentation of future imports; already-loaded functions remain
 instrumented. Start a fresh process to return the application fully to normal.
+
+## Future idea: a dedicated Python interpreter
+
+A future idea is to build a new Python interpreter that routes operations
+through a shared, trainable neural ALU directly during execution. That could
+extend the experiment beyond the current source instrumentation and make neural
+operations part of the interpreter itself. This is an exploratory idea; the
+current implementation still uses Python's existing interpreter and import hooks.
 
 ## Network and encoding
 
@@ -226,7 +256,7 @@ arithmetic.
 ## Three ways to use allmengine
 
 Run these commands from the repository root after installing the engine into
- your environment (`uv pip install -e ./allmengine`). Use `python -m allmengine`,
+your environment (`python -m pip install -e ./allmengine`). Use `python -m allmengine`,
 not `python allmengine`: `-m` runs the installed Python package.
 
 ### 1. Run an application
@@ -271,15 +301,17 @@ Put activation in a separate launcher, before importing the application:
 ```python
 import json
 from pathlib import Path
+
 import allmengine
 
 # Optional: load trained weights. Omit this block to use random weights.
 model = allmengine.BinaryNetwork()
-model.load_state_dict(json.loads(Path("weights.json").read_text()))
+model.load_state_dict(json.loads(Path("weights.json").read_text(encoding="utf-8")))
 allmengine.alu.set_model(model)
 
 allmengine.enable("myapp")
 from myapp.main import main
+
 main()
 ```
 
@@ -287,3 +319,8 @@ Application code keeps normal operators such as `+`, `*`, and comparisons.
 Calling `enable()` does not rewrite the launcher that is already running.
 For a deterministic integration check, explicitly install
 `allmengine.reference.ReferenceModel()` instead of the neural model.
+
+## License
+
+Licensed under the [WTFPL, version 2](LICENSE) (Do What The Fuck You Want To
+Public License). Do what you want with it.
