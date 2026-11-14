@@ -3,8 +3,14 @@ name = "allmtest"
 version = "0.1.0"
 description = "Basic Python behavior tests for allm"
 requires-python = ">=3.10"
-dependencies = ["pytest>=8,<10"]
+dependencies = [
+    "allmengine",
+    "pytest>=8,<10",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["../allmengine/src", "."]
+
+[tool.uv.sources]
+allmengine = { path = "../allmengine", editable = true }

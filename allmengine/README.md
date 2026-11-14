@@ -148,3 +148,6 @@ See the [project README](../README.md) for the complete integration guide,
 development commands, and current implementation boundaries. The
 [bit encoding specification](../BIT_ENCODING.md) describes the implemented input
 layout, integer encoding, and majority-vote boolean decoding.
+
+For the unified `--run` / `--train` CLI and Python import integration, see
+[the three-mode tutorial](../README.md#three-ways-to-use-allmengine).

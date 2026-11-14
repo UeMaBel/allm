@@ -25,56 +25,33 @@ python -m pip install -e ./allmengine
 From another directory, replace `./allmengine` with the path to the package
 folder. See the [package README](allmengine/README.md) for a compact usage guide.
 
-Installation alone does not change Python's operators. Activate the import hook
-once, before importing the application packages you want to instrument:
+### Run without a launcher file
 
-```python
-# launch.py — outside the myapp package
-import allmengine
-
-allmengine.enable("myapp")
-
-from myapp.main import main
-main()
-```
-
-The application stays ordinary Python:
-
-```python
-# myapp/calculator.py
-def calculate(left, right):
-    total = left + right
-    if total > 0:
-        return total * 2
-    return 0
-```
-
-Calls such as `calculate(3, 4)` route numeric operations through the shared ALU.
-Inputs and results are plain Python values. There is no need for `NeuralValue`
-constructors, new function signatures, or changes to application operators.
-
-To select multiple packages, use `allmengine.enable("myapp", "myotherapp")`.
-Choose application code only; keep custom models outside those packages.
-
-## Run without a launcher file
-
-Instead of `python -m myapp.main`, run:
+Run an existing Python script and its arguments directly:
 
 ```sh
-python -m allmengine myapp.main --your-application-argument
+uv run python -m allmengine --run "manage.py runserver" --package myapp
 ```
 
-The runner instruments the entry module's top-level package (`myapp` here).
-Explicit selections go before the module name:
+Replace `myapp` with the application package containing your logic. Repeat
+`--package` to select additional packages. The entry script is instrumented too.
+
+For an importable module, use:
 
 ```sh
-python -m allmengine --package myapp --package sharedlogic myapp.main
+uv run python -m allmengine --run "-m myapp.main --your-application-argument"
 ```
 
-The runner accepts importable module names, not filesystem script paths. For
-an existing standalone `script.py`, run `python -m allmengine script` from its
-directory. Putting `enable()` inside an already-running script does not rewrite
-that script; use the runner or a separate launcher.
+The module's top-level package (`myapp` here) is selected by default. Quote the
+entry point and all its arguments together. Use `python -m allmengine` without
+`uv run` if you manage your virtual environment another way.
+
+The application keeps ordinary Python operators and plain inputs and results.
+No launcher file or `NeuralValue` wrappers are required. The default network
+starts with random weights; add `--weights weights.json` to load trained weights.
+
+For training and integration through `import allmengine`, see
+[Three ways to use allmengine](#three-ways-to-use-allmengine).
 
 ## What activation changes
 
@@ -254,3 +231,68 @@ python -m allmengine.trainer ./allmtest --factory allmengine.reference:Reference
 
 Passing reference tests verifies wiring; it does not demonstrate learned neural
 arithmetic.
+
+## Three ways to use allmengine
+
+Run these commands from the repository root after installing the engine into
+ your environment (`uv pip install -e ./allmengine`). Use `python -m allmengine`,
+not `python allmengine`: `-m` runs the installed Python package.
+
+### 1. Run an application
+
+```powershell
+uv run python -m allmengine --run "manage.py runserver" --package myapp
+uv run python -m allmengine --run "-m myapp.main --port 8000" --weights weights.json
+```
+
+Replace `myapp` with the application package containing your logic. Repeat
+`--package` for additional packages. The script itself is instrumented too.
+For module entry points, the default selection is the module's top-level package;
+for scripts it is the script's stem. Select your application packages explicitly
+when a launcher such as `manage.py` imports the actual application.
+
+Without `--weights`, execution uses a new random network. With `--weights`, it
+loads the saved model state. Quote the entire Python command and its arguments.
+These commands run Python code, not shell pipelines or shell commands.
+
+### 2. Train against tests
+
+```powershell
+uv run python -m allmengine --train "pytest allmtest/tests -q" --max-evaluations 100 --checkpoint weights.json
+```
+
+Training uses pytest feedback, mutates network weights, and saves the best state.
+The quoted command can include pytest paths, filters, and other pytest options.
+For ordinary application code, add `--package myapp` to instrument it before
+pytest imports it. The allmtest suite already uses `NeuralValue` wrappers, so it
+needs no package selection. Keep test assertions outside instrumented packages.
+
+Normal pytest runs in allmtest install the native reference backend; training
+bypasses that override automatically. Training starts with a new model each time;
+`--checkpoint` saves results and does not resume training. Random mutation search
+may not converge. Large integers and integer division-by-zero cases in the
+current suite exceed the codec's capabilities; float operations run natively.
+
+### 3. Integrate in Python code
+
+Put activation in a separate launcher, before importing the application:
+
+```python
+import json
+from pathlib import Path
+import allmengine
+
+# Optional: load trained weights. Omit this block to use random weights.
+model = allmengine.BinaryNetwork()
+model.load_state_dict(json.loads(Path("weights.json").read_text()))
+allmengine.alu.set_model(model)
+
+allmengine.enable("myapp")
+from myapp.main import main
+main()
+```
+
+Application code keeps normal operators such as `+`, `*`, and comparisons.
+Calling `enable()` does not rewrite the launcher that is already running.
+For a deterministic integration check, explicitly install
+`allmengine.reference.ReferenceModel()` instead of the neural model.
