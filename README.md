@@ -1,8 +1,10 @@
 # allm
 
-Bored with coding?
-Your codebase is super clean, well tested and you understand everything?
-Make it interesting again, use allm and let the chaos reign.
+Bored with coding? Your codebase is clean, your tests are green, and addition
+stubbornly keeps returning the right answer? Give your operators to an untrained
+neural network. Suddenly, `2 + 2` is a matter of opinion, `if` statements have
+trust issues, and your test suite has a new job: teaching Python math again.
+Use allm. Let the chaos reign.
 
 allm is an experimental project that routes selected Python operations through
 one shared neural ALU, then mutates its weights using feedback from your tests.
@@ -85,17 +87,6 @@ normal bool, so a later truth check on it follows the usual bool ALU path.
 Operations involving strings, containers, and custom classes retain native
 Python behavior. This fallback does not add network data types.
 
-## Why the engine does not call itself recursively
-
-Instrumentation is scoped to explicitly selected application module names.
-`allmengine`, pytest infrastructure, and standard-library modules cannot be
-selected. Imports of dependencies outside the selected names remain native.
-Network weight calculations, bit encoding, and result decoding therefore use
-ordinary Python operators, even when triggered by an instrumented operation.
-
-Do not define a model's `forward()` implementation inside an instrumented
-application package: its arithmetic would be instrumented too. Keep models in
-a separate, unselected module.
 
 ## Model and test integration
 

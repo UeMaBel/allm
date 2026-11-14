@@ -1,6 +1,19 @@
 import importlib
 from pathlib import Path
 import subprocess
+
+
+def test_script_runner_always_enters_main_guard(tmp_path):
+    script = tmp_path / "demo.py"
+    script.write_text('if __name__ == "__main__":\n    print("entered")\n')
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    process = subprocess.run(
+        [sys.executable, "-m", "allmengine", "--run", f'"{script}"', "--package", "demo"],
+        env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert process.returncode == 0, process.stderr
+    assert process.stdout.strip() == "entered"
 import sys
 import os
 

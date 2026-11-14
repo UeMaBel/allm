@@ -145,7 +145,21 @@ class _Transform(ast.NodeTransformer):
         return ast.copy_location(ast.Attribute(self._compare(node), "value", ast.Load()), node)
 
     def visit_If(self, node):
-        node.test = self.condition(node.test)
+        # Entry-point guards control Python module startup, not application math.
+        test = node.test
+        main_guard = (
+            isinstance(test, ast.Compare) and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+            and len(test.comparators) == 1
+            and ((isinstance(test.left, ast.Name) and test.left.id == "__name__"
+                  and isinstance(test.comparators[0], ast.Constant)
+                  and test.comparators[0].value == "__main__")
+                 or (isinstance(test.left, ast.Constant) and test.left.value == "__main__"
+                     and isinstance(test.comparators[0], ast.Name)
+                     and test.comparators[0].id == "__name__"))
+        )
+        if not main_guard:
+            node.test = self.condition(node.test)
         node.body = [self.visit(stmt) for stmt in node.body]
         node.orelse = [self.visit(stmt) for stmt in node.orelse]
         return node

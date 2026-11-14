@@ -92,3 +92,27 @@ uv run python -m allmengine --train "pytest allmtest/tests -q" --max-evaluations
 ```
 
 The older `python -m allmengine.trainer` interface below remains supported.
+
+## Calculator demo
+
+From this directory, compare ordinary Python with the random neural network:
+
+```powershell
+uv run python calculator.py 2 + 3
+uv run python -m allmengine --run "calculator.py 2 + 3"
+```
+
+The first prints `2 + 3 = 5`. The second sends the addition through the neural
+network: the answer depends on its weights. Try subtraction, multiplication,
+ and division too:
+
+```powershell
+uv run python -m allmengine --run "calculator.py 12 - 5"
+uv run python -m allmengine --run "calculator.py 6 * 7"
+uv run python -m allmengine --run "calculator.py 8 / 2"
+```
+
+Load trained weights with `--weights ../weights.json` (adjust the path to your
+checkpoint). Use small integers for neural math; decimal inputs deliberately
+use native Python arithmetic. For negative operands, put `--` before the values,
+for example `calculator.py -- -2 + -3`.
