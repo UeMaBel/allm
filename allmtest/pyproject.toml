@@ -1,0 +1,10 @@
+[project]
+name = "allmtest"
+version = "0.1.0"
+description = "Basic Python behavior tests for allm"
+requires-python = ">=3.10"
+dependencies = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["../allmengine/src", "."]
