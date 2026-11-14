@@ -184,10 +184,11 @@ Spaces separate fields for readability; the network receives 40 individual bits.
 
 ## Implementation alignment
 
-The majority-vote rule above is the agreed result specification. The current
-`BinaryNetwork.forward` implementation still reads only the final output bit
-for boolean operations; updating that decoder and its tests remains necessary
-to match this document.
+`BinaryNetwork.forward` implements the majority-vote rule for comparisons and
+truthiness. The threshold follows the configured output width; ties are false.
+Network checkpoints have no version requirement. Boolean decoding always uses
+majority voting, including when loading older weights. Any legacy version field
+is ignored and is not written into new checkpoints.
 
 This document specifies the requested **left → right → operation** layout.
 The current `BinaryNetwork.encode` implementation still emits

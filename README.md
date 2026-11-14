@@ -175,9 +175,13 @@ suite includes cases beyond those limits and is not currently a reachable
 training target for this codec.
 
 [BIT_ENCODING.md](BIT_ENCODING.md) specifies operand fields, operation keys,
-integer results, and the agreed majority-vote boolean format. Its implementation
-alignment section records pending differences: the encoder currently puts the
-opcode first, and the decoder still reads one boolean output bit.
+integer results, and the implemented majority-vote boolean format: more than
+half the output bits must be 1 for true; ties are false. The threshold follows
+the configured output width. The encoder still puts the opcode first, as noted
+in the specification's implementation alignment section.
+
+Network checkpoints store configuration and weights without versioning.
+Boolean results always use majority decoding, including for older checkpoints.
 
 The central boundary is `NetworkModel.forward(opcode, lhs, rhs)`, exposed through
 `allmengine.alu`. A model returns raw results; BOOL must return a Python `bool`.

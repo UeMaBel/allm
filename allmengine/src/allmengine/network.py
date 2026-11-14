@@ -109,18 +109,17 @@ class BinaryNetwork:
         opcode = OpCode(opcode)
         bits = self.forward_bits(self.encode(opcode, lhs, rhs))
         if opcode in PREDICATES:
-            return bool(bits[-1])
+            # Strict majority at any configured output width; ties are false.
+            return sum(bits) * 2 > len(bits)
         value = 0
         for bit in bits:
             value = (value << 1) | bit
         return value - (1 << len(bits)) if bits[0] else value
 
     def state_dict(self):
-        return {"version": 1, "config": asdict(self.config), "layers": deepcopy(self.layers)}
+        return {"config": asdict(self.config), "layers": deepcopy(self.layers)}
 
     def load_state_dict(self, state):
-        if state.get("version") != 1:
-            raise ValueError("Unsupported network checkpoint version")
         config = NetworkConfig(**state["config"])
         layers = deepcopy(state["layers"])
         if len(layers) != len(config.widths) - 1:

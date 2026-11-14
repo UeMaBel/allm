@@ -75,6 +75,12 @@ The initial codec accepts bools and signed integers; default operands must fit
 in 16 bits. Floats, strings, character types, and exception signaling are not
 supported by the network. Configuration changes apply to newly created models.
 
+Comparisons and truthiness decode by strict majority: with 16 output bits,
+9–16 ones mean true and 0–8 mean false. The threshold adapts to the configured
+output width; ties are false. Arithmetic still decodes as signed integers.
+Checkpoints store configuration and weights without versioning. Loaded models
+always use majority decoding, including those saved by older implementations.
+
 For a deterministic wiring check, explicitly select the native reference model
 before importing the application:
 

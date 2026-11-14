@@ -66,7 +66,37 @@ def test_neural_values_use_actual_network(monkeypatch):
     model.layers[-1]["biases"][:] = [-1] * 13 + [1, -1, 1]
     monkeypatch.setattr(alu, "model", model)
     assert (NeuralValue(10) + 20).value == 5
-    assert bool(NeuralValue(0)) is True
+    assert bool(NeuralValue(0)) is False
+    # Nine ones win even with a zero final bit, including actual control flow.
+    model.layers[-1]["biases"][:] = [1] * 9 + [-1] * 7
+    branch = "false"
+    if NeuralValue(0):
+        branch = "true"
+    assert branch == "true"
+
+
+@pytest.mark.parametrize("opcode", [OpCode.LT, OpCode.LE, OpCode.EQ, OpCode.NE,
+                                   OpCode.GT, OpCode.GE, OpCode.BOOL])
+@pytest.mark.parametrize("ones,expected", [(0, False), (7, False), (8, False),
+                                          (9, True), (16, True)])
+def test_all_predicates_use_strict_majority_regardless_of_bit_order(monkeypatch, opcode, ones, expected):
+    model = BinaryNetwork(replace(small_config(), output_bits=16))
+    bits = [1] * ones + [0] * (16 - ones)
+    monkeypatch.setattr(model, "forward_bits", lambda inputs: bits)
+    assert model.forward(opcode, 0, 0) is expected
+    bits.reverse()
+    assert model.forward(opcode, 0, 0) is expected
+
+
+@pytest.mark.parametrize("width,ones,expected", [
+    (1, 0, False), (1, 1, True),
+    (4, 2, False), (4, 3, True),
+    (5, 2, False), (5, 3, True),
+])
+def test_majority_threshold_follows_configured_output_width(monkeypatch, width, ones, expected):
+    model = BinaryNetwork(replace(small_config(), output_bits=width))
+    monkeypatch.setattr(model, "forward_bits", lambda inputs: [1] * ones + [0] * (width - ones))
+    assert model.forward(OpCode.BOOL, 0) is expected
 
 
 @pytest.mark.parametrize("bits", [[0] * 39, [2] * 40, [0.0] * 40])
@@ -119,14 +149,34 @@ def test_invalid_checkpoint_leaves_model_unchanged():
     assert model.state_dict() == before
 
 
+@pytest.mark.parametrize("legacy_version", [None, 1, 2, 99])
+def test_checkpoint_always_uses_majority_regardless_of_legacy_metadata(legacy_version):
+    model = BinaryNetwork(small_config())
+    for row in model.layers[-1]["weights"]:
+        row[:] = [0] * len(row)
+    model.layers[-1]["biases"][:] = [1, 1, 1, -1]
+    saved = model.state_dict()
+    assert "version" not in saved
+    if legacy_version is not None:
+        saved["version"] = legacy_version
+    restored = BinaryNetwork()
+    restored.load_state_dict(saved)
+    assert restored.forward(OpCode.BOOL, 0) is True
+    assert "version" not in restored.state_dict()
+
+
 def test_actual_network_checkpoint_reaches_pytest_worker(tmp_path):
     model = BinaryNetwork(small_config())
+    for row in model.layers[-1]["weights"]:
+        row[:] = [0] * len(row)
+    model.layers[-1]["biases"][:] = [1, 1, 1, -1]
     expected = model.forward(OpCode.ADD, 1, 0)
     (tmp_path / "test_candidate.py").write_text(
         "from allmengine import NeuralValue, alu\n"
         "def test_candidate():\n"
         "    assert alu.model.config.widths == (12, 3, 2, 4)\n"
         f"    assert (NeuralValue(1) + 0).value == {expected}\n"
+        "    assert bool(NeuralValue(0)) is True\n"
     )
     feedback = Trainer("allmengine.network:BinaryNetwork", tmp_path).evaluate(model)
     assert feedback.success
