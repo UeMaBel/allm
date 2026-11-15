@@ -1,6 +1,6 @@
 from dataclasses import replace
 import json
-import random
+import torch
 
 import pytest
 
@@ -18,7 +18,7 @@ def test_requested_architecture_and_binary_output():
     model = BinaryNetwork()
     assert model.config.widths == (40, 128, 128, 128, 16)
     assert [(len(layer["weights"][0]), len(layer["weights"]))
-            for layer in model.layers] == [(40, 128), (128, 128), (128, 128), (128, 16)]
+            for layer in model.state_dict()["layers"]] == [(40, 128), (128, 128), (128, 128), (128, 16)]
     bits = model.forward_bits([0, 1] * 20)
     assert len(bits) == 16
     assert set(bits) <= {0, 1}
@@ -33,17 +33,21 @@ def test_config_file_and_environment_change_architecture(tmp_path, monkeypatch):
     assert BinaryNetwork(config_path).config == small_config()
 
 
-def test_known_weights_propagate_bits_through_every_layer():
+def test_relu_hidden_units_and_unbounded_signed_output_scores():
     config = replace(small_config(), hidden_bits=(1, 1, 1), output_bits=1)
     model = BinaryNetwork(config)
-    for layer in model.layers:
+    saved = model.state_dict()
+    for layer in saved["layers"]:
         for row in layer["weights"]:
-            row[:] = [1] + [0] * (len(row) - 1)
+            row[:] = [2] + [0] * (len(row) - 1)
         layer["biases"][:] = [-0.5]
+    model.load_state_dict(saved)
     assert model.forward_bits([0] * 12) == [0]
     assert model.forward_bits([1] + [0] * 11) == [1]
-    model.layers[1]["weights"][0][0] = -1
-    assert model.forward_bits([1] + [0] * 11) == [0]
+    inputs = torch.tensor([[0] * 12, [1] + [0] * 11], dtype=torch.float32)
+    assert model.forward_logits(inputs).tolist() == [[-0.5], [8.5]]
+    model.forward_logits(inputs).sum().backward()
+    assert model.module[0].weight.grad.abs().sum() > 0
 
 
 def test_signed_operand_encoding_and_predicate_decoding(monkeypatch):
@@ -62,14 +66,17 @@ def test_signed_operand_encoding_and_predicate_decoding(monkeypatch):
 def test_neural_values_use_actual_network(monkeypatch):
     model = BinaryNetwork()
     # Constant output 5, produced by final-layer biases, not native addition.
-    for row in model.layers[-1]["weights"]:
+    state = model.state_dict()
+    for row in state["layers"][-1]["weights"]:
         row[:] = [0] * len(row)
-    model.layers[-1]["biases"][:] = [-1] * 13 + [1, -1, 1]
+    state["layers"][-1]["biases"][:] = [-1] * 13 + [1, -1, 1]
+    model.load_state_dict(state)
     monkeypatch.setattr(alu, "model", model)
     assert (NeuralValue(10) + 20).value == 5
     assert bool(NeuralValue(0)) is False
     # Nine ones win even with a zero final bit, including actual control flow.
-    model.layers[-1]["biases"][:] = [1] * 9 + [-1] * 7
+    state["layers"][-1]["biases"][:] = [1] * 9 + [-1] * 7
+    model.load_state_dict(state)
     branch = "false"
     if NeuralValue(0):
         branch = "true"
@@ -128,7 +135,8 @@ def test_reject_invalid_config(changes):
 def test_checkpoint_roundtrip_restores_config_weights_and_outputs():
     original = BinaryNetwork(small_config())
     saved = json.loads(json.dumps(original.state_dict()))
-    original.mutate(random.Random(42))
+    with torch.no_grad():
+        original.module[0].weight.add_(1)
     assert original.state_dict()["layers"] != saved["layers"]
     restored = BinaryNetwork()
     restored.load_state_dict(saved)
@@ -149,27 +157,26 @@ def test_invalid_checkpoint_leaves_model_unchanged():
     assert model.state_dict() == before
 
 
-@pytest.mark.parametrize("legacy_version", [None, 1, 2, 99])
-def test_checkpoint_always_uses_majority_regardless_of_legacy_metadata(legacy_version):
+@pytest.mark.parametrize("model_type", [None, "binary-v1", "future-network"])
+def test_incompatible_checkpoint_is_rejected_atomically(model_type):
     model = BinaryNetwork(small_config())
-    for row in model.layers[-1]["weights"]:
-        row[:] = [0] * len(row)
-    model.layers[-1]["biases"][:] = [1, 1, 1, -1]
+    before = model.state_dict()
     saved = model.state_dict()
-    assert "version" not in saved
-    if legacy_version is not None:
-        saved["version"] = legacy_version
-    restored = BinaryNetwork()
-    restored.load_state_dict(saved)
-    assert restored.forward(OpCode.BOOL, 0) is True
-    assert "version" not in restored.state_dict()
+    saved.pop("model_type")
+    if model_type is not None:
+        saved["model_type"] = model_type
+    with pytest.raises(ValueError, match="checkpoint model_type"):
+        model.load_state_dict(saved)
+    assert model.state_dict() == before
 
 
 def test_actual_network_checkpoint_reaches_pytest_worker(tmp_path):
     model = BinaryNetwork(small_config())
-    for row in model.layers[-1]["weights"]:
+    state = model.state_dict()
+    for row in state["layers"][-1]["weights"]:
         row[:] = [0] * len(row)
-    model.layers[-1]["biases"][:] = [1, 1, 1, -1]
+    state["layers"][-1]["biases"][:] = [1, 1, 1, -1]
+    model.load_state_dict(state)
     expected = model.forward(OpCode.ADD, 1, 0)
     (tmp_path / "test_candidate.py").write_text(
         "from allmengine import NeuralValue, alu\n"
@@ -183,38 +190,33 @@ def test_actual_network_checkpoint_reaches_pytest_worker(tmp_path):
 
 
 @pytest.mark.parametrize("changes", [
-    {"mutation_rate": 0}, {"mutation_rate": 1.1},
-    {"mutation_scale": 0}, {"mutation_scale": float("nan")},
+    {"learning_rate": 0}, {"learning_rate": float("nan")},
+    {"learning_rate": float("inf")}, {"learning_rate": True},
+    {"batch_size": 0}, {"batch_size": 1.5}, {"epochs": 0},
+    {"epochs": True}, {"shuffle": 1},
 ])
 def test_reject_invalid_training_config(changes):
     with pytest.raises(ValueError):
         replace(TrainingConfig.load(), **changes)
 
 
-def test_training_file_controls_mutations(tmp_path, monkeypatch):
+def test_training_settings_file_environment_and_checkpoint(tmp_path, monkeypatch):
     path = tmp_path / "training.json"
-    path.write_text(json.dumps({"mutation_rate": 1, "mutation_scale": 0.5}))
+    path.write_text(json.dumps({"learning_rate": 0.02, "batch_size": 8,
+                                "epochs": 3, "shuffle": False}))
     monkeypatch.setenv("ALLMENGINE_TRAINING_CONFIG", str(path))
+    expected = TrainingConfig(learning_rate=0.02, batch_size=8, epochs=3, shuffle=False)
     model = BinaryNetwork(small_config())
-    before = model.state_dict()
-    rng = random.Random(42)
-    expected = before["layers"][0]["weights"][0][0]
-    rng.random()
-    expected += rng.gauss(0, 0.5)
-    model.mutate(random.Random(42))
-    assert model.layers[0]["weights"][0][0] == expected
-    restored = BinaryNetwork(small_config(), TrainingConfig(0.1, 0.01))
+    assert model.training_config == expected
+    restored = BinaryNetwork(small_config(), TrainingConfig())
     restored.load_state_dict(model.state_dict())
-    assert restored.training_config == TrainingConfig(1, 0.5)
-    assert BinaryNetwork(small_config(), path).training_config == TrainingConfig(1, 0.5)
+    assert restored.training_config == expected
+    assert BinaryNetwork(small_config(), path).training_config == expected
 
 
-def test_load_legacy_mutation_settings_without_changing_checkpoint():
-    model = BinaryNetwork(small_config())
-    state = model.state_dict()
-    del state["training_config"]
-    state["config"].update(mutation_rate=0.2, mutation_scale=0.3)
-    model.load_state_dict(state)
-    assert model.training_config == TrainingConfig(0.2, 0.3)
-    assert state["config"]["mutation_rate"] == 0.2
-    assert "mutation_rate" not in model.state_dict()["config"]
+def test_initialization_is_reproducible_without_changing_torch_random_state():
+    before = torch.random.get_rng_state()
+    first = BinaryNetwork(small_config())
+    second = BinaryNetwork(small_config())
+    assert first.state_dict() == second.state_dict()
+    assert torch.equal(before, torch.random.get_rng_state())

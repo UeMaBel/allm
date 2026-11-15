@@ -314,9 +314,11 @@ def test_trainer_instruments_plain_application_but_not_test_oracle(tmp_path):
     # A network with a deliberately wrong ADD result must fail the native oracle.
     from allmengine import BinaryNetwork
     model = BinaryNetwork()
-    for row in model.layers[-1]["weights"]:
+    state = model.state_dict()
+    for row in state["layers"][-1]["weights"]:
         row[:] = [0] * len(row)
-    model.layers[-1]["biases"][:] = [-1] * model.config.output_bits
+    state["layers"][-1]["biases"][:] = [-1] * model.config.output_bits
+    model.load_state_dict(state)
     feedback = Trainer("allmengine.network:BinaryNetwork", tmp_path,
                        instrument=("plain_app",)).evaluate(model)
     assert feedback.failed == 1

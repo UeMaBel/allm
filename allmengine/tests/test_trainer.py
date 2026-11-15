@@ -79,28 +79,28 @@ def test_worker_timeout_stops_evaluation(experiment):
         Trainer("candidate_model:Model", experiment, timeout=0.3).train(1)
 
 
-def test_weighted_fitness_improves_while_pytest_still_fails(experiment):
-    (experiment / "bit_model.py").write_text("""
+def test_gradient_updates_reach_pytest_worker(experiment):
+    (experiment / "gradient_model.py").write_text("""
 from dataclasses import replace
-from allmengine import BinaryNetwork, NetworkConfig
+from allmengine import BinaryNetwork, NetworkConfig, TrainingConfig
 class Model(BinaryNetwork):
     def __init__(self):
-        super().__init__(replace(NetworkConfig.load(), hidden_bits=(2,), output_bits=8))
-        for row in self.layers[-1]['weights']:
+        super().__init__(replace(NetworkConfig.load(), hidden_bits=(), output_bits=4),
+                         TrainingConfig(learning_rate=0.1, epochs=20))
+        state = self.state_dict()
+        for row in state['layers'][-1]['weights']:
             row[:] = [0] * len(row)
-        self.layers[-1]['biases'][:] = [-1, -1, 1, -1, -1, -1, -1, -1]
-    def mutate(self, rng):
-        self.layers[-1]['biases'][:] = [-1, -1, -1, -1, -1, 1, -1, -1]
+        state['layers'][-1]['biases'][:] = [1, 1, 1, 1]
+        self.load_state_dict(state)
 """)
     (experiment / "test_target.py").write_text(
         "from allmengine import NeuralValue\n"
         "def test_add():\n    assert (NeuralValue(0) + 0).value == 0\n")
-    result = Trainer("bit_model:Model", experiment).train(2)
-    assert result.feedback.passed == 0
-    assert result.feedback.test_pass_rate == 0
-    assert result.feedback.score == pytest.approx(1 - 4 / 255)
-    assert result.feedback.operations[0]["bits"] == [0, 0, 0, 0, 0, 1, 0, 0]
-    assert alu.model.forward('add', 0, 0) == 4
+    result = Trainer("gradient_model:Model", experiment, seed=42).train(3)
+    assert result.converged
+    assert result.evaluations == 2
+    assert result.feedback.operation_accuracy == 1
+    assert alu.model.forward('add', 0, 0) == 0
 
 
 def test_new_branches_rescore_incumbent_on_same_inputs(experiment):

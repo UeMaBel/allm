@@ -9,11 +9,13 @@ from allmengine.fitness import RecordingModel, evaluate_operations
 def constant_network(value, width=8):
     config = replace(NetworkConfig.load(), hidden_bits=(2,), output_bits=width)
     model = BinaryNetwork(config)
-    for row in model.layers[-1]["weights"]:
+    state = model.state_dict()
+    for row in state["layers"][-1]["weights"]:
         row[:] = [0] * len(row)
-    model.layers[-1]["biases"][:] = [
+    state["layers"][-1]["biases"][:] = [
         1 if (value >> shift) & 1 else -1 for shift in range(width - 1, -1, -1)
     ]
+    model.load_state_dict(state)
     return model
 
 

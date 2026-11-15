@@ -197,9 +197,12 @@ Spaces separate fields for readability; the network receives 40 individual bits.
 
 `BinaryNetwork.forward` implements the majority-vote rule for comparisons and
 truthiness. The threshold follows the configured output width; ties are false.
-Network checkpoints have no version requirement. Boolean decoding always uses
-majority voting, including when loading older weights. Any legacy version field
-is ignored and is not written into new checkpoints.
+ReLU network checkpoints carry `model_type: relu-bit-network-v1`; old
+binary-activation weights are rejected and require retraining. This changes
+internal computation and training, not the encoding or majority-vote rule.
+Hidden activations are continuous ReLU values. The output layer produces one
+linear score per bit; runtime uses `score >= 0`, while training applies
+binary cross-entropy with logits directly to the continuous scores.
 
 The input layout is **operation → left → right**, matching
 `BinaryNetwork.encode`. The examples above use this implemented layout.

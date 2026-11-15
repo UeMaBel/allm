@@ -12,7 +12,7 @@ trust issues, and your test suite has a new job: teaching Python math again.
 Use allm. Let the chaos reign.
 
 allm is an experimental project that routes selected Python operations through
-one shared neural ALU, then mutates its weights using feedback from your tests.
+one shared neural ALU, then learns its weights from reference targets for operations observed in your tests.
 Application code keeps ordinary operators; one-time activation selects the
 packages to instrument.
 
@@ -160,12 +160,15 @@ current implementation still uses Python's existing interpreter and import hooks
 
 ## Network and encoding
 
-The default `BinaryNetwork` has **40 input bits, three hidden layers of 128 bits,
+The default `BinaryNetwork` has **40 input bits, three hidden layers of 128 ReLU units,
 and 16 output bits**. Dimensions and initialization seed live in
-[network.json](allmengine/src/allmengine/network.json). Mutation rate and scale
-live in [training.json](allmengine/src/allmengine/training.json).
-Hidden and output activations are binary; weights and biases are floating-point.
-These widths count logical bits, not Python memory usage.
+[network.json](allmengine/src/allmengine/network.json). Adam learning rate,
+batch size, epochs between evaluations, and shuffling live in
+[training.json](allmengine/src/allmengine/training.json).
+PyTorch computes continuous hidden activations and linear output scores.
+Runtime thresholds output scores at zero; training uses binary cross-entropy
+with logits before thresholding. The historical `hidden_bits` key counts units.
+Input encoding and integer/majority-boolean decoding remain unchanged.
 
 Set `ALLMENGINE_NETWORK_CONFIG` to an absolute JSON file path before starting
 Python, or construct `BinaryNetwork("path/to/network.json")` and install it with
@@ -187,8 +190,10 @@ half the output bits must be 1 for true; ties are false. The threshold follows
 the configured output width. The input layout is **8-bit opcode → 16-bit left
 operand → 16-bit right operand**, matching the implementation and specification.
 
-Network checkpoints store configuration and weights without versioning.
-Boolean results always use majority decoding, including for older checkpoints.
+Network checkpoints store configuration, weights, and the explicit model type
+`relu-bit-network-v1`. Old binary-activation checkpoints are incompatible and
+require retraining. Existing `weights.json` and `pretrained.json` files are not
+converted or overwritten automatically.
 
 The central boundary is `NetworkModel.forward(opcode, lhs, rhs)`, exposed through
 `allmengine.alu`. A model returns raw results; BOOL must return a Python `bool`.
@@ -212,18 +217,34 @@ must not replace the installed candidate model.
 
 Each candidate runs in a fresh Python process, with checkpoint state loaded and
 instrumentation enabled before pytest imports application code. The trainer
-retains non-decreasing reference-based operation fitness, restores the best state, and stops
+retains the best exact operation accuracy (breaking ties by operation fitness),
+restores that state, and stops
 when pytest succeeds with at least one passed test or the evaluation budget runs
 out. Skips do not count as passes. Collection, setup, teardown, and timeout errors
 abort training.
 
-`BinaryNetwork.mutate` perturbs shared weights and biases. This is black-box
-mutation search, not gradient-based learning; convergence is not guaranteed.
+`BinaryNetwork` uses Adam and uniform per-bit binary cross-entropy on reference
+targets for the observed operations. Newly reached branches expand the training
+corpus; both current and retained weights are scored on the same inputs.
+Training updates continue from the latest weights, independently of which
+checkpoint is retained. Passing pytest takes precedence over operation metrics.
+This trains individual ALU calls, not gradients through Python control flow.
+Convergence is not guaranteed.
+
+Both training CLIs accept `--learning-rate`, `--batch-size`, `--epochs`,
+`--shuffle` / `--no-shuffle`, and `--training-config PATH`. `--epochs` counts
+passes between evaluations; the first evaluation makes no updates. Individual
+flags override an explicit settings file, which overrides checkpoint settings.
+Without a checkpoint, settings come from `ALLMENGINE_TRAINING_CONFIG` or the
+packaged `training.json`. Checkpoints restore model/settings only, not Adam state.
+See [the package guide](allmengine/README.md#gradient-pretraining-example) for
+pretraining and fine-tuning examples.
 
 To use another model, provide an importable zero-argument factory such as
 `my_model:Model`, with `forward`, `state_dict`, `load_state_dict`, and
 `mutate(random.Random)`. State must be a JSON-compatible dictionary. Keep that
-model module outside the instrumented application packages.
+model module outside the instrumented application packages. Custom models that
+are not `BinaryNetwork` subclasses continue using mutation search.
 
 ## Development and verification
 
@@ -283,7 +304,8 @@ These commands run Python code, not shell pipelines or shell commands.
 uv run python -m allmengine --train "pytest allmtest/tests -q" --max-evaluations 100 --checkpoint weights.json
 ```
 
-Training uses pytest feedback, mutates network weights, and saves the best state.
+Training uses reference targets from pytest-observed calls, backpropagates with
+Adam, and saves the best evaluated state.
 The quoted command can include pytest paths, filters, and other pytest options.
 For ordinary application code, add `--package myapp` to instrument it before
 pytest imports it. The allmtest suite already uses `NeuralValue` wrappers, so it
@@ -291,8 +313,8 @@ needs no package selection. Keep test assertions outside instrumented packages.
 
 Normal pytest runs in allmtest install the native reference backend; training
 bypasses that override automatically. Training starts with a new model each time;
-`--checkpoint` saves results and does not resume training. Random mutation search
-may not converge. Large integers and integer division-by-zero cases in the
+`--checkpoint` saves results; `--weights` loads a compatible ReLU checkpoint.
+Gradient training may not converge. Large integers and integer division-by-zero cases in the
 current suite exceed the codec's capabilities; float operations run natively.
 
 ### 3. Integrate in Python code

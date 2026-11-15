@@ -1,11 +1,12 @@
-"""Dense network with binary activations and floating-point trainable weights."""
+"""PyTorch ReLU network with a binary input/output runtime interface."""
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 import json
 import math
 import os
 from pathlib import Path
-import random
+import torch
+from torch import nn
 
 from .constants import OPCODE_IDS, PREDICATES, OpCode
 from .training_config import TrainingConfig
@@ -49,25 +50,36 @@ def _bits(value, width):
 
 
 class BinaryNetwork:
-    """One shared fully connected network; threshold each neuron at zero.
+    """Shared CPU network: ReLU hidden units, linear logits, hard output bits.
 
-    Bit widths describe logical activations, not Python storage or weight sizes.
-    Initial weights are random; this model does not know arithmetic in advance.
+    The historical name describes the external interface, not hidden activations.
+    ``module`` is the differentiable PyTorch implementation; JSON checkpoints
+    remain separate from PyTorch's tensor state dictionaries.
     """
+
+    MODEL_TYPE = "relu-bit-network-v1"
 
     def __init__(self, config=None, training_config=None):
         self.config = config if isinstance(config, NetworkConfig) else NetworkConfig.load(config)
         self.training_config = (training_config if isinstance(training_config, TrainingConfig)
                                 else TrainingConfig.load(training_config))
-        rng = random.Random(self.config.seed)
-        self.layers = []
-        for inputs, outputs in zip(self.config.widths, self.config.widths[1:]):
-            scale = 1 / math.sqrt(inputs)
-            self.layers.append({
-                "weights": [[rng.gauss(0, scale) for _ in range(inputs)]
-                            for _ in range(outputs)],
-                "biases": [rng.gauss(0, scale) for _ in range(outputs)],
-            })
+        self.module = self._build(self.config)
+
+    @staticmethod
+    def _build(config):
+        # Local initialization must not change the application's random stream.
+        with torch.random.fork_rng(devices=[]):
+            torch.random.default_generator.manual_seed(config.seed)
+            modules = []
+            for index, (inputs, outputs) in enumerate(zip(config.widths, config.widths[1:])):
+                modules.append(nn.Linear(inputs, outputs, device="cpu", dtype=torch.float32))
+                if index < len(config.hidden_bits):
+                    modules.append(nn.ReLU())
+            return nn.Sequential(*modules)
+
+    def forward_logits(self, inputs):
+        """Differentiable scores for float tensors shaped (..., input_bits)."""
+        return self.module(inputs)
 
     def forward_bits(self, bits):
         values = list(bits)
@@ -75,10 +87,9 @@ class BinaryNetwork:
             raise ValueError(f"Expected {self.config.input_bits} input bits")
         if any(type(bit) not in (int, bool) or bit not in (0, 1) for bit in values):
             raise ValueError("Inputs must be binary values")
-        for layer in self.layers:
-            values = [int(sum(weight * bit for weight, bit in zip(row, values)) + bias >= 0)
-                      for row, bias in zip(layer["weights"], layer["biases"])]
-        return values
+        with torch.inference_mode():
+            logits = self.forward_logits(torch.tensor(values, dtype=torch.float32))
+            return (logits >= 0).to(torch.int64).tolist()
 
     def encode(self, opcode, lhs, rhs=None):
         """MSB-first opcode + two signed two's-complement integer operands."""
@@ -108,19 +119,18 @@ class BinaryNetwork:
         return value - (1 << len(bits)) if bits[0] else value
 
     def state_dict(self):
-        return {"config": asdict(self.config),
+        return {"model_type": self.MODEL_TYPE, "config": asdict(self.config),
                 "training_config": asdict(self.training_config),
-                "layers": deepcopy(self.layers)}
+                "layers": [{"weights": layer.weight.detach().tolist(),
+                            "biases": layer.bias.detach().tolist()}
+                           for layer in self.module if isinstance(layer, nn.Linear)]}
 
     def load_state_dict(self, state):
-        # Older checkpoints stored mutation settings alongside architecture.
-        config_data = dict(state["config"])
-        legacy_training = {key: config_data.pop(key) for key in
-                           ("mutation_rate", "mutation_scale") if key in config_data}
-        config = NetworkConfig(**config_data)
-        training_data = state.get("training_config", legacy_training)
-        training_config = (TrainingConfig(**training_data) if training_data
-                           else self.training_config)
+        if state.get("model_type") != self.MODEL_TYPE:
+            raise ValueError("Unsupported checkpoint model_type; legacy binary-activation "
+                             "checkpoints require retraining with the ReLU network")
+        config = NetworkConfig(**state["config"])
+        training_config = TrainingConfig(**state["training_config"])
         layers = deepcopy(state["layers"])
         if len(layers) != len(config.widths) - 1:
             raise ValueError("Checkpoint layer count does not match config")
@@ -133,18 +143,13 @@ class BinaryNetwork:
             for number in [*biases, *(value for row in weights for value in row)]:
                 if type(number) not in (int, float) or not math.isfinite(number):
                     raise ValueError("Checkpoint weights and biases must be finite numbers")
-        self.config, self.layers = config, layers
-        self.training_config = training_config
-
-    def mutate(self, rng):
-        parameters = [row for layer in self.layers
-                      for row in [*layer["weights"], layer["biases"]]]
-        changed = False
-        for row in parameters:
-            for index in range(len(row)):
-                if rng.random() < self.training_config.mutation_rate:
-                    row[index] += rng.gauss(0, self.training_config.mutation_scale)
-                    changed = True
-        if not changed:
-            row = rng.choice(parameters)
-            row[rng.randrange(len(row))] += rng.gauss(0, self.training_config.mutation_scale)
+        module = self._build(config)
+        with torch.no_grad():
+            for layer, saved in zip((m for m in module if isinstance(m, nn.Linear)), layers):
+                weight = torch.tensor(saved["weights"], dtype=torch.float32)
+                bias = torch.tensor(saved["biases"], dtype=torch.float32)
+                if not torch.isfinite(weight).all() or not torch.isfinite(bias).all():
+                    raise ValueError("Checkpoint parameters exceed float32 range")
+                layer.weight.copy_(weight)
+                layer.bias.copy_(bias)
+        self.config, self.module, self.training_config = config, module, training_config

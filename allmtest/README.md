@@ -34,15 +34,17 @@ uv run python -m allmengine.trainer . --factory allmengine.network:BinaryNetwork
 ```
 
 The trainer automatically bypasses the reference backend. Each candidate runs
-against the pytest suite in a fresh worker process. The trainer keeps mutations
-whose passed-test fraction does not decrease and writes the best model state to
+against the pytest suite in a fresh worker process. The trainer uses Adam on
+reference targets for observed operations, retaining the best exact operation
+accuracy (then bit fitness), and writes the retained model state to
 `weights.json`, relative to the directory where you ran the command. It stops
 when the suite passes or the evaluation budget is exhausted.
 
-Increase `--max-evaluations` for a longer run. Training uses random mutation
-search rather than gradient descent; improvement and convergence are not
-guaranteed. The checkpoint is an output file; this command does not resume from
-an existing checkpoint.
+Increase `--max-evaluations` for a longer run. `--epochs` controls gradient
+training passes between evaluations; `--learning-rate` and `--batch-size` tune
+Adam. Improvement and convergence are not guaranteed. `--weights PATH` loads
+a compatible ReLU checkpoint; legacy binary-activation weights need retraining.
+`--checkpoint` selects the output file, not an input checkpoint.
 
 The tests already wrap inputs in `NeuralValue`, so no `--instrument` flag is
 needed. Add arithmetic cases to the `tests/*_cases.py` files or add pytest tests

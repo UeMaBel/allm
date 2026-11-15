@@ -6,10 +6,25 @@ import shlex
 from pathlib import Path
 
 from .instrumentation import enable
+from .training.config import add_training_arguments, training_overrides
 
 
 def main():
+    # Pretraining owns its dataset options and uses no pytest worker.
+    if "--pretrain" in sys.argv[1:]:
+        if "--run" in sys.argv[1:] or "--train" in sys.argv[1:]:
+            raise SystemExit("Choose only one of --pretrain, --train, or --run")
+        from .training.pretrain import main as pretrain_main
+        previous = sys.argv
+        try:
+            sys.argv = [arg for arg in sys.argv if arg != "--pretrain"]
+            return pretrain_main()
+        finally:
+            sys.argv = previous
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--pretrain", action="store_true", help="Train on generated equations (use --pretrain --help for options)")
+    add_training_arguments(parser)
+    parser.add_argument("--seed", type=int, help="Training shuffle seed")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--run", metavar="COMMAND", help='Run Python code, e.g. "manage.py runserver" or "-m myapp.main"')
     modes.add_argument("--train", metavar="COMMAND", help='Train against pytest, e.g. "pytest allmtest/tests -q"')
@@ -39,7 +54,9 @@ def main():
             from .trainer import Trainer
             import json
             result = Trainer(args.factory, Path.cwd(), pytest_args=command,
-                             timeout=args.timeout, instrument=args.package, weights=args.weights).train(args.max_evaluations)
+                             timeout=args.timeout, instrument=args.package, weights=args.weights,
+                             seed=args.seed, training_config=args.training_config,
+                             training_options=training_overrides(args)).train(args.max_evaluations)
             args.checkpoint.write_text(json.dumps(result.state, indent=2), encoding="utf-8")
             print(f"converged={result.converged} evaluations={result.evaluations} "
                   f"passed={result.feedback.passed} failed={result.feedback.failed} "
