@@ -56,3 +56,24 @@ def test_all_skipped_is_not_convergence(experiment):
     result = Trainer("candidate_model:Model", experiment).train(1)
     assert not result.converged
     assert result.feedback.skipped == 1
+
+
+def test_training_reports_configuration_and_selected_test_count(experiment, capsys):
+    (experiment / "test_other.py").write_text("def test_other(): pass\n")
+    Trainer("candidate_model:Model", experiment,
+            pytest_args=("-k", "test_add"), seed=42).train(1)
+    output = capsys.readouterr().out
+    assert "Starting training: candidate_model:Model" in output
+    assert str(experiment) in output
+    assert "seed: 42" in output
+    assert "Loading pytest and collecting tests" in output
+    assert "Test count: 1 selected tests" in output
+    assert "Passed: 0; failed: 1; skipped: 0" in output
+    assert "evaluation budget exhausted" in output
+
+
+def test_worker_timeout_stops_evaluation(experiment):
+    (experiment / "test_target.py").write_text(
+        "import time\ndef test_slow():\n    time.sleep(5)\n")
+    with pytest.raises(RuntimeError, match="pytest evaluation timed out"):
+        Trainer("candidate_model:Model", experiment, timeout=0.3).train(1)
