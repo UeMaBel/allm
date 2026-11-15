@@ -127,3 +127,21 @@ class Model(ReferenceModel):
     assert result.state == {'weight': 0}
     assert result.feedback.scored_operations == 3
     assert result.feedback.score == pytest.approx(2 / 3)
+
+
+def test_training_initializes_from_saved_weights(experiment, capsys):
+    import json
+    checkpoint = experiment / "weights.json"
+    checkpoint.write_text(json.dumps({"weight": 1}))
+    result = Trainer("candidate_model:Model", experiment, weights=checkpoint).train(2)
+    assert result.converged
+    assert result.evaluations == 2
+    assert result.state == {"weight": 2}
+    assert json.loads(checkpoint.read_text()) == {"weight": 1}
+    assert f"Initial weights: {checkpoint}" in capsys.readouterr().out
+
+
+def test_missing_initial_weights_fail_without_fresh_training(experiment):
+    with pytest.raises(FileNotFoundError):
+        Trainer("candidate_model:Model", experiment,
+                weights=experiment / "missing.json").train(1)

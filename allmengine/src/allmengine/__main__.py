@@ -14,7 +14,7 @@ def main():
     modes.add_argument("--run", metavar="COMMAND", help='Run Python code, e.g. "manage.py runserver" or "-m myapp.main"')
     modes.add_argument("--train", metavar="COMMAND", help='Train against pytest, e.g. "pytest allmtest/tests -q"')
     parser.add_argument("--factory", default="allmengine.network:BinaryNetwork")
-    parser.add_argument("--weights", type=Path, help="Load model state for --run")
+    parser.add_argument("--weights", type=Path, help="Load model state for --run or initialize --train")
     parser.add_argument("--checkpoint", type=Path, default=Path("weights.json"))
     parser.add_argument("--max-evaluations", type=int, default=100)
     parser.add_argument("--timeout", type=float, default=60)
@@ -39,7 +39,7 @@ def main():
             from .trainer import Trainer
             import json
             result = Trainer(args.factory, Path.cwd(), pytest_args=command,
-                             timeout=args.timeout, instrument=args.package).train(args.max_evaluations)
+                             timeout=args.timeout, instrument=args.package, weights=args.weights).train(args.max_evaluations)
             args.checkpoint.write_text(json.dumps(result.state, indent=2), encoding="utf-8")
             print(f"converged={result.converged} evaluations={result.evaluations} "
                   f"passed={result.feedback.passed} failed={result.feedback.failed} "

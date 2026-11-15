@@ -178,3 +178,16 @@ non-integral results, and reference exceptions are excluded with visible counts;
 perfect operation fitness alone does not imply all tests can pass.
 Custom models without a bit interface use exact operation-result correctness
 against the reference, rather than pytest pass rate.
+
+To initialize training from a saved checkpoint:
+
+```sh
+python -m allmengine --train "pytest allmtest/tests -q" --weights weights.json --checkpoint weights.json
+```
+
+`--weights` loads the model configuration and parameters before the first
+evaluation. `--checkpoint` selects where the retained result is saved; use a
+different path to preserve the input file. Without `--weights`, training starts
+from a newly initialized model. This resumes model state, not the previous
+random-generator state or recorded operation corpus. The standalone
+`python -m allmengine.trainer` CLI also accepts `--weights`.

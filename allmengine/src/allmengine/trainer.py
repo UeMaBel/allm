@@ -83,7 +83,7 @@ class Trainer:
     belong to the model, not to this harness.
     """
 
-    def __init__(self, factory, project, pytest_args=(), timeout=60, seed=None, instrument=()):
+    def __init__(self, factory, project, pytest_args=(), timeout=60, seed=None, instrument=(), weights=None):
         self.factory = factory
         self.project = Path(project).resolve()
         self.pytest_args = tuple(pytest_args)
@@ -91,6 +91,7 @@ class Trainer:
         self.seed = seed
         self.rng = random.Random(seed)
         self.instrument = tuple(instrument)
+        self.weights = Path(weights).resolve() if weights is not None else None
 
     def evaluate(self, model):
         """Run a candidate in isolation, keeping pytest output for error diagnostics."""
@@ -181,6 +182,10 @@ class Trainer:
         print(f"  Instrumented packages: {', '.join(self.instrument) or '(none)'}", flush=True)
         print(f"  Evaluation budget: {max_evaluations}; timeout: {self.timeout}s; seed: {self.seed}", flush=True)
         model = _create_model(self.factory)
+        if self.weights is not None:
+            # Load before evaluating or mutating, including saved configuration.
+            model.load_state_dict(json.loads(self.weights.read_text(encoding="utf-8")))
+            print(f"  Initial weights: {self.weights}", flush=True)
         training_config = getattr(model, "training_config", None)
         if training_config is not None:
             print(f"  Mutation rate: {training_config.mutation_rate}; "
@@ -297,12 +302,13 @@ def main():
     parser.add_argument("--max-evaluations", type=int, default=100)
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--weights", type=Path, help="Initialize training from saved model state")
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--instrument", action="append", default=[], metavar="PACKAGE",
                         help="Instrument an application package before pytest imports it (repeatable)")
     args = parser.parse_args()
     result = Trainer(args.factory, args.project, timeout=args.timeout,
-                     seed=args.seed, instrument=args.instrument).train(args.max_evaluations)
+                     seed=args.seed, instrument=args.instrument, weights=args.weights).train(args.max_evaluations)
     if args.checkpoint:
         args.checkpoint.write_text(json.dumps(result.state, indent=2), encoding="utf-8")
     print(f"converged={result.converged} evaluations={result.evaluations} "
