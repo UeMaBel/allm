@@ -6,18 +6,8 @@ import keyword
 import operator
 import sys
 
-from .cpu import OpCode, alu
-
-
-_BINARY = {
-    ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "truediv",
-    ast.FloorDiv: "floordiv", ast.Mod: "mod", ast.Pow: "pow", ast.MatMult: "matmul",
-    ast.LShift: "lshift", ast.RShift: "rshift", ast.BitAnd: "and_",
-    ast.BitOr: "or_", ast.BitXor: "xor",
-}
-_UNARY = {ast.UAdd: "pos", ast.USub: "neg", ast.Invert: "invert"}
-_COMPARE = {ast.Lt: "lt", ast.LtE: "le", ast.Eq: "eq", ast.NotEq: "ne",
-            ast.Gt: "gt", ast.GtE: "ge"}
+from .constants import BINARY_AST_OPS, COMPARISON_AST_OPS, UNARY_AST_OPS, OpCode
+from .cpu import alu
 
 
 def _numeric(value):
@@ -73,7 +63,7 @@ def _comparison(name):
     return compare
 
 
-for _name in _COMPARE.values():
+for _name in COMPARISON_AST_OPS.values():
     setattr(_CompareOperand, f"__{_name}__", _comparison(_name))
 
 
@@ -119,18 +109,18 @@ class _Transform(ast.NodeTransformer):
             return ast.copy_location(ast.BoolOp(node.op, [self.condition(v) for v in node.values]), node)
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             return ast.copy_location(ast.UnaryOp(ast.Not(), self.condition(node.operand)), node)
-        if isinstance(node, ast.Compare) and all(type(op) in _COMPARE for op in node.ops):
+        if isinstance(node, ast.Compare) and all(type(op) in COMPARISON_AST_OPS for op in node.ops):
             return ast.copy_location(self._compare(node), node)
         return ast.copy_location(self.call("_truth", self.visit(node)), node)
 
     def visit_BinOp(self, node):
-        return ast.copy_location(self.call("_binary", ast.Constant(_BINARY[type(node.op)]),
+        return ast.copy_location(self.call("_binary", ast.Constant(BINARY_AST_OPS[type(node.op)]),
                                            self.visit(node.left), self.visit(node.right)), node)
 
     def visit_UnaryOp(self, node):
         if isinstance(node.op, ast.Not):
             return ast.copy_location(ast.UnaryOp(ast.Not(), self.condition(node.operand)), node)
-        return ast.copy_location(self.call("_unary", ast.Constant(_UNARY[type(node.op)]),
+        return ast.copy_location(self.call("_unary", ast.Constant(UNARY_AST_OPS[type(node.op)]),
                                            self.visit(node.operand)), node)
 
     def visit_BoolOp(self, node):
@@ -140,7 +130,7 @@ class _Transform(ast.NodeTransformer):
     def visit_Compare(self, node):
         # Identity/membership must see original objects, not adapter objects.
         # Mixed chains containing them deliberately retain native comparisons.
-        if not all(type(op) in _COMPARE for op in node.ops):
+        if not all(type(op) in COMPARISON_AST_OPS for op in node.ops):
             return self.generic_visit(node)
         return ast.copy_location(ast.Attribute(self._compare(node), "value", ast.Load()), node)
 
@@ -190,7 +180,7 @@ class _Transform(ast.NodeTransformer):
         return node
 
     def visit_AugAssign(self, node):
-        name = ast.Constant(_BINARY[type(node.op)])
+        name = ast.Constant(BINARY_AST_OPS[type(node.op)])
         right = self.visit(node.value)
         if isinstance(node.target, ast.Name):
             value = self.call("_inplace", name, ast.Name(node.target.id, ast.Load()), right)

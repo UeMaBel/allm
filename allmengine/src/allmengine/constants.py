@@ -1,4 +1,5 @@
 """Shared operation names and stable network opcode IDs."""
+import ast
 from enum import Enum
 
 
@@ -40,3 +41,14 @@ UNARY_NAMES = ("neg", "pos", "abs", "invert")
 # never reorder existing ones.
 OPCODE_IDS = {opcode: index for index, opcode in enumerate(OpCode)}
 PREDICATES = frozenset(OpCode[name.upper()] for name in (*COMPARISON_NAMES, "bool"))
+
+
+BINARY_AST_OPS = {
+    ast.Add: "add", ast.Sub: "sub", ast.Mult: "mul", ast.Div: "truediv",
+    ast.FloorDiv: "floordiv", ast.Mod: "mod", ast.Pow: "pow", ast.MatMult: "matmul",
+    ast.LShift: "lshift", ast.RShift: "rshift", ast.BitAnd: "and_",
+    ast.BitOr: "or_", ast.BitXor: "xor",
+}
+UNARY_AST_OPS = {ast.UAdd: "pos", ast.USub: "neg", ast.Invert: "invert"}
+COMPARISON_AST_OPS = {ast.Lt: "lt", ast.LtE: "le", ast.Eq: "eq", ast.NotEq: "ne",
+            ast.Gt: "gt", ast.GtE: "ge"}
