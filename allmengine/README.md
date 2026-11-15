@@ -120,7 +120,7 @@ Each candidate runs in a fresh worker. Select application packages with
 `--instrument`, keeping assertions and expected values native. Repeat the flag
 for more packages. Do not replace the candidate model in test setup.
 
-The trainer keeps mutations with non-decreasing passed-test fractions and stops
+The trainer keeps mutations with non-decreasing reference-based operation fitness and stops
 on success or budget exhaustion. Checkpoints store configuration and weights.
 Mutation search does not guarantee convergence. Choose tests whose inputs and
 results fit the codec's range and supported types.
@@ -158,3 +158,23 @@ layout, integer encoding, and majority-vote boolean decoding.
 
 For the unified `--run` / `--train` CLI and Python import integration, see
 [the three-mode tutorial](../README.md#three-ways-to-use-allmengine).
+
+### Operation fitness
+
+Tests stay unchanged. Training workers record neural opcodes, operands, and raw
+output bits. `ReferenceModel` supplies native expected results for fitness only;
+application code always receives the candidate's own answers.
+
+Integer arithmetic uses positional bit weights (including the magnitude of the
+sign bit). Bitwise AND, OR, XOR, inversion, and shifts use equal bit weights.
+Comparisons and truthiness score decoded boolean correctness under majority voting.
+Scores are normalized per operation and averaged over distinct opcode/input calls.
+Native float fallbacks do not enter this neural-operation corpus.
+
+Newly reached calls expand a shared corpus; the candidate and incumbent are both
+rescored on that same corpus before selection. Pytest pass rate is printed
+separately and remains the convergence check. Operand overflow, result overflow,
+non-integral results, and reference exceptions are excluded with visible counts;
+perfect operation fitness alone does not imply all tests can pass.
+Custom models without a bit interface use exact operation-result correctness
+against the reference, rather than pytest pass rate.

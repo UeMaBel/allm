@@ -2,11 +2,11 @@
 
 The parent creates and mutates a model. Each evaluation starts a fresh Python
 process, loads that candidate's weights, and runs the selected pytest suite.
-Passed-test fractions decide which candidate to keep; no gradients are used.
+Reference-based operation fitness decides which candidate to keep; no gradients are used.
 The worker writes collection progress and final counts back to the parent.
 """
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import importlib
 import json
 import os
@@ -19,6 +19,7 @@ import time
 from typing import Protocol
 
 from .cpu import NetworkModel, alu
+from .fitness import RecordingModel, evaluate_operations, operation_key
 
 
 class TrainableModel(NetworkModel, Protocol):
@@ -37,16 +38,26 @@ class Feedback:
     skipped: int
     exit_code: int
     output: str
+    operations: tuple = ()
+    operation_score: float = 0.0
+    scored_operations: int = 0
+    excluded_operations: tuple = ()
 
     @property
     def success(self):
         return self.exit_code == 0 and self.passed > 0
 
     @property
-    def score(self):
+    def test_pass_rate(self):
         # Skipped tests supply no evidence of correctness, so they lower the score.
         total = self.passed + self.failed + self.skipped
         return self.passed / total if total else 0.0
+
+
+    @property
+    def score(self):
+        """Mutation fitness; pytest pass rate is reported separately."""
+        return self.operation_score
 
 
 @dataclass(frozen=True)
@@ -155,8 +166,11 @@ class Trainer:
             counts = json.loads(report.read_text(encoding="utf-8"))
             if counts["errors"]:
                 raise RuntimeError(f"pytest setup/teardown failure:\n{output}")
-            return Feedback(counts["passed"], counts["failed"], counts["skipped"],
-                            process.returncode, output)
+            operations = tuple(counts["operations"])
+            feedback = Feedback(counts["passed"], counts["failed"], counts["skipped"],
+                                process.returncode, output, operations)
+            corpus = {operation_key(op): op for op in operations}
+            return self._score_operations(model, feedback, corpus.values())
 
     def train(self, max_evaluations=100):
         if max_evaluations < 1:
@@ -176,6 +190,7 @@ class Trainer:
         print(f"Evaluation 1/{max_evaluations} (initial model)", flush=True)
         best = self.evaluate(model)
         self._print_feedback(best)
+        corpus = {operation_key(op): op for op in best.operations}
         best_state = json.loads(json.dumps(model.state_dict()))
         evaluations = 1
         while not best.success and evaluations < max_evaluations:
@@ -184,21 +199,49 @@ class Trainer:
             model.mutate(self.rng)
             print(f"Evaluation {evaluations + 1}/{max_evaluations}", flush=True)
             candidate = self.evaluate(model)
+            candidate_state = json.loads(json.dumps(model.state_dict()))
+            # A mutation can reach new branches. Add their calls to a shared
+            # corpus and rescore BOTH states on it before comparing fitness.
+            previous_count = len(corpus)
+            corpus.update((operation_key(op), op) for op in candidate.operations)
+            if len(corpus) > previous_count:
+                print(f"  Shared operation corpus expanded: {previous_count} -> {len(corpus)} calls; "
+                      "rescoring both models", flush=True)
+            candidate = self._score_operations(model, candidate, corpus.values())
+            model.load_state_dict(best_state)
+            best = self._score_operations(model, best, corpus.values())
             self._print_feedback(candidate)
+            print(f"  Incumbent fitness on same inputs: {best.score:.4%}", flush=True)
             evaluations += 1
             # Ties are kept too, allowing exploration without losing score.
-            if candidate.success or candidate.score >= best.score:
+            if candidate.score >= best.score:
                 best = candidate
-                best_state = json.loads(json.dumps(model.state_dict()))
+                best_state = candidate_state
+                print("  Candidate kept", flush=True)
+            else:
+                print("  Candidate rejected", flush=True)
         model.load_state_dict(best_state)
         print(f"Training finished: {'converged' if best.success else 'evaluation budget exhausted'}; "
-              f"{evaluations} evaluations", flush=True)
+              f"{evaluations} evaluations; retained operation fitness: {best.score:.4%}", flush=True)
         return TrainingResult(best.success, evaluations, best, best_state)
+
+    @staticmethod
+    def _score_operations(model, feedback, operations):
+        fitness = evaluate_operations(model, operations)
+        return replace(feedback, operation_score=fitness.score,
+                       scored_operations=fitness.scored,
+                       excluded_operations=tuple(fitness.excluded.items()))
 
     @staticmethod
     def _print_feedback(feedback):
         print(f"  Passed: {feedback.passed}; failed: {feedback.failed}; "
-              f"skipped: {feedback.skipped}; score: {feedback.score:.1%}", flush=True)
+              f"skipped: {feedback.skipped}; pytest pass rate: {feedback.test_pass_rate:.1%}", flush=True)
+        print(f"  Operation fitness: {feedback.score:.4%}; "
+              f"scored operations: {feedback.scored_operations}", flush=True)
+        if not feedback.scored_operations:
+            print("  No supported neural operations available for fitness", flush=True)
+        for reason, count in feedback.excluded_operations:
+            print(f"  Excluded operations ({reason}): {count}", flush=True)
 
 
 class _Report:
@@ -234,7 +277,8 @@ def main():
         factory, state_path, report_path, *args = sys.argv[2:]
         model = _create_model(factory)
         model.load_state_dict(json.loads(Path(state_path).read_text(encoding="utf-8")))
-        alu.set_model(model)
+        recorder = RecordingModel(model)
+        alu.set_model(recorder)
         from .instrumentation import enable
         packages = json.loads(os.environ.get("ALLMENGINE_INSTRUMENT", "[]"))
         hook = enable(*packages) if packages else None
@@ -244,6 +288,7 @@ def main():
         finally:
             if hook:
                 hook.close()
+        report.counts["operations"] = recorder.operations
         Path(report_path).write_text(json.dumps(report.counts), encoding="utf-8")
         return int(code)
     parser = argparse.ArgumentParser(description=__doc__)

@@ -1,4 +1,4 @@
-"""Explicit native oracle for wiring tests, NOT a neural implementation."""
+"""Native oracle for wiring tests and training feedback; not a neural model."""
 import operator
 from .cpu import OpCode
 

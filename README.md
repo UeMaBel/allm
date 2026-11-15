@@ -212,7 +212,7 @@ must not replace the installed candidate model.
 
 Each candidate runs in a fresh Python process, with checkpoint state loaded and
 instrumentation enabled before pytest imports application code. The trainer
-retains non-decreasing passed-test fractions, restores the best state, and stops
+retains non-decreasing reference-based operation fitness, restores the best state, and stops
 when pytest succeeds with at least one passed test or the evaluation budget runs
 out. Skips do not count as passes. Collection, setup, teardown, and timeout errors
 abort training.

@@ -95,7 +95,11 @@ class BinaryNetwork:
     def forward(self, opcode, lhs, rhs=None):
         opcode = OpCode(opcode)
         bits = self.forward_bits(self.encode(opcode, lhs, rhs))
-        if opcode in PREDICATES:
+        return self.decode(opcode, bits)
+
+    def decode(self, opcode, bits):
+        """Decode raw output bits using the same rules for runtime and training."""
+        if OpCode(opcode) in PREDICATES:
             # Strict majority at any configured output width; ties are false.
             return sum(bits) * 2 > len(bits)
         value = 0

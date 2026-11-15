@@ -77,3 +77,53 @@ def test_worker_timeout_stops_evaluation(experiment):
         "import time\ndef test_slow():\n    time.sleep(5)\n")
     with pytest.raises(RuntimeError, match="pytest evaluation timed out"):
         Trainer("candidate_model:Model", experiment, timeout=0.3).train(1)
+
+
+def test_weighted_fitness_improves_while_pytest_still_fails(experiment):
+    (experiment / "bit_model.py").write_text("""
+from dataclasses import replace
+from allmengine import BinaryNetwork, NetworkConfig
+class Model(BinaryNetwork):
+    def __init__(self):
+        super().__init__(replace(NetworkConfig.load(), hidden_bits=(2,), output_bits=8))
+        for row in self.layers[-1]['weights']:
+            row[:] = [0] * len(row)
+        self.layers[-1]['biases'][:] = [-1, -1, 1, -1, -1, -1, -1, -1]
+    def mutate(self, rng):
+        self.layers[-1]['biases'][:] = [-1, -1, -1, -1, -1, 1, -1, -1]
+""")
+    (experiment / "test_target.py").write_text(
+        "from allmengine import NeuralValue\n"
+        "def test_add():\n    assert (NeuralValue(0) + 0).value == 0\n")
+    result = Trainer("bit_model:Model", experiment).train(2)
+    assert result.feedback.passed == 0
+    assert result.feedback.test_pass_rate == 0
+    assert result.feedback.score == pytest.approx(1 - 4 / 255)
+    assert result.feedback.operations[0]["bits"] == [0, 0, 0, 0, 0, 1, 0, 0]
+    assert alu.model.forward('add', 0, 0) == 4
+
+
+def test_new_branches_rescore_incumbent_on_same_inputs(experiment):
+    (experiment / "branch_model.py").write_text("""
+from allmengine.reference import ReferenceModel
+class Model(ReferenceModel):
+    def __init__(self): self.weight = 0
+    def state_dict(self): return {'weight': self.weight}
+    def load_state_dict(self, state): self.weight = state['weight']
+    def mutate(self, rng): self.weight = 1
+    def forward(self, opcode, lhs, rhs=None):
+        expected = super().forward(opcode, lhs, rhs)
+        if opcode.value == 'add': return expected if self.weight else expected - 1
+        return 0 if self.weight else expected
+""")
+    (experiment / "test_target.py").write_text(
+        "from allmengine import NeuralValue\n"
+        "def test_branches():\n"
+        "    assert (NeuralValue(3) + 4).value == 7\n"
+        "    first = (NeuralValue(5) - 2).value\n"
+        "    second = (NeuralValue(7) - 2).value\n"
+        "    assert (first, second) == (3, 5)\n")
+    result = Trainer("branch_model:Model", experiment).train(2)
+    assert result.state == {'weight': 0}
+    assert result.feedback.scored_operations == 3
+    assert result.feedback.score == pytest.approx(2 / 3)
