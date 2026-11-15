@@ -161,8 +161,9 @@ current implementation still uses Python's existing interpreter and import hooks
 ## Network and encoding
 
 The default `BinaryNetwork` has **40 input bits, three hidden layers of 128 bits,
-and 16 output bits**. Dimensions, initialization seed, mutation rate, and
-mutation scale live in [network.json](allmengine/src/allmengine/network.json).
+and 16 output bits**. Dimensions and initialization seed live in
+[network.json](allmengine/src/allmengine/network.json). Mutation rate and scale
+live in [training.json](allmengine/src/allmengine/training.json).
 Hidden and output activations are binary; weights and biases are floating-point.
 These widths count logical bits, not Python memory usage.
 

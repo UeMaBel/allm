@@ -71,6 +71,13 @@ from allmengine import BinaryNetwork, alu
 alu.set_model(BinaryNetwork("path/to/network.json"))
 ```
 
+Mutation settings live separately in [training.json](src/allmengine/training.json).
+Set `ALLMENGINE_TRAINING_CONFIG` to an absolute path before starting Python, or
+pass `training_config=TrainingConfig(...)` or a JSON path to `BinaryNetwork`.
+`TrainingConfig` is exported from `allmengine`. Checkpoints preserve these
+settings; older checkpoints with mutation settings inside network config still load.
+Sampling, shuffling, and epochs are deferred until the trainer supports them.
+
 The input layout is **8-bit opcode → 16-bit left operand → 16-bit right operand**.
 The network codec accepts bools and signed integers; default operands must fit
 in 16 bits. Strings, character types, floats, and exception signaling have no

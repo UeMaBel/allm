@@ -8,6 +8,7 @@ from pathlib import Path
 import random
 
 from .constants import OPCODE_IDS, PREDICATES, OpCode
+from .training_config import TrainingConfig
 
 
 @dataclass(frozen=True)
@@ -18,8 +19,6 @@ class NetworkConfig:
     opcode_bits: int
     operand_bits: int
     seed: int
-    mutation_rate: float
-    mutation_scale: float
 
     def __post_init__(self):
         object.__setattr__(self, "hidden_bits", tuple(self.hidden_bits))
@@ -33,10 +32,6 @@ class NetworkConfig:
             raise ValueError("opcode_bits cannot represent every opcode")
         if type(self.seed) is not int:
             raise ValueError("seed must be an integer")
-        if not math.isfinite(self.mutation_rate) or not 0 < self.mutation_rate <= 1:
-            raise ValueError("mutation_rate must be in (0, 1]")
-        if not math.isfinite(self.mutation_scale) or self.mutation_scale <= 0:
-            raise ValueError("mutation_scale must be finite and positive")
 
     @property
     def widths(self):
@@ -60,8 +55,10 @@ class BinaryNetwork:
     Initial weights are random; this model does not know arithmetic in advance.
     """
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, training_config=None):
         self.config = config if isinstance(config, NetworkConfig) else NetworkConfig.load(config)
+        self.training_config = (training_config if isinstance(training_config, TrainingConfig)
+                                else TrainingConfig.load(training_config))
         rng = random.Random(self.config.seed)
         self.layers = []
         for inputs, outputs in zip(self.config.widths, self.config.widths[1:]):
@@ -107,10 +104,19 @@ class BinaryNetwork:
         return value - (1 << len(bits)) if bits[0] else value
 
     def state_dict(self):
-        return {"config": asdict(self.config), "layers": deepcopy(self.layers)}
+        return {"config": asdict(self.config),
+                "training_config": asdict(self.training_config),
+                "layers": deepcopy(self.layers)}
 
     def load_state_dict(self, state):
-        config = NetworkConfig(**state["config"])
+        # Older checkpoints stored mutation settings alongside architecture.
+        config_data = dict(state["config"])
+        legacy_training = {key: config_data.pop(key) for key in
+                           ("mutation_rate", "mutation_scale") if key in config_data}
+        config = NetworkConfig(**config_data)
+        training_data = state.get("training_config", legacy_training)
+        training_config = (TrainingConfig(**training_data) if training_data
+                           else self.training_config)
         layers = deepcopy(state["layers"])
         if len(layers) != len(config.widths) - 1:
             raise ValueError("Checkpoint layer count does not match config")
@@ -124,6 +130,7 @@ class BinaryNetwork:
                 if type(number) not in (int, float) or not math.isfinite(number):
                     raise ValueError("Checkpoint weights and biases must be finite numbers")
         self.config, self.layers = config, layers
+        self.training_config = training_config
 
     def mutate(self, rng):
         parameters = [row for layer in self.layers
@@ -131,9 +138,9 @@ class BinaryNetwork:
         changed = False
         for row in parameters:
             for index in range(len(row)):
-                if rng.random() < self.config.mutation_rate:
-                    row[index] += rng.gauss(0, self.config.mutation_scale)
+                if rng.random() < self.training_config.mutation_rate:
+                    row[index] += rng.gauss(0, self.training_config.mutation_scale)
                     changed = True
         if not changed:
             row = rng.choice(parameters)
-            row[rng.randrange(len(row))] += rng.gauss(0, self.config.mutation_scale)
+            row[rng.randrange(len(row))] += rng.gauss(0, self.training_config.mutation_scale)

@@ -5,6 +5,7 @@ import random
 import pytest
 
 from allmengine import BinaryNetwork, NetworkConfig, NeuralValue, OpCode, alu
+from allmengine import TrainingConfig
 from allmengine.trainer import Trainer
 
 
@@ -117,7 +118,6 @@ def test_codec_rejects_unrepresentable_operands():
 
 @pytest.mark.parametrize("changes", [
     {"input_bits": 39}, {"hidden_bits": (0,)}, {"output_bits": -1},
-    {"mutation_rate": 0}, {"mutation_scale": float("nan")},
     {"input_bits": 36, "opcode_bits": 4},
 ])
 def test_reject_invalid_config(changes):
@@ -180,3 +180,41 @@ def test_actual_network_checkpoint_reaches_pytest_worker(tmp_path):
     )
     feedback = Trainer("allmengine.network:BinaryNetwork", tmp_path).evaluate(model)
     assert feedback.success
+
+
+@pytest.mark.parametrize("changes", [
+    {"mutation_rate": 0}, {"mutation_rate": 1.1},
+    {"mutation_scale": 0}, {"mutation_scale": float("nan")},
+])
+def test_reject_invalid_training_config(changes):
+    with pytest.raises(ValueError):
+        replace(TrainingConfig.load(), **changes)
+
+
+def test_training_file_controls_mutations(tmp_path, monkeypatch):
+    path = tmp_path / "training.json"
+    path.write_text(json.dumps({"mutation_rate": 1, "mutation_scale": 0.5}))
+    monkeypatch.setenv("ALLMENGINE_TRAINING_CONFIG", str(path))
+    model = BinaryNetwork(small_config())
+    before = model.state_dict()
+    rng = random.Random(42)
+    expected = before["layers"][0]["weights"][0][0]
+    rng.random()
+    expected += rng.gauss(0, 0.5)
+    model.mutate(random.Random(42))
+    assert model.layers[0]["weights"][0][0] == expected
+    restored = BinaryNetwork(small_config(), TrainingConfig(0.1, 0.01))
+    restored.load_state_dict(model.state_dict())
+    assert restored.training_config == TrainingConfig(1, 0.5)
+    assert BinaryNetwork(small_config(), path).training_config == TrainingConfig(1, 0.5)
+
+
+def test_load_legacy_mutation_settings_without_changing_checkpoint():
+    model = BinaryNetwork(small_config())
+    state = model.state_dict()
+    del state["training_config"]
+    state["config"].update(mutation_rate=0.2, mutation_scale=0.3)
+    model.load_state_dict(state)
+    assert model.training_config == TrainingConfig(0.2, 0.3)
+    assert state["config"]["mutation_rate"] == 0.2
+    assert "mutation_rate" not in model.state_dict()["config"]
