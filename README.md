@@ -232,11 +232,21 @@ This trains individual ALU calls, not gradients through Python control flow.
 Convergence is not guaranteed.
 
 Both training CLIs accept `--learning-rate`, `--batch-size`, `--epochs`,
-`--shuffle` / `--no-shuffle`, and `--training-config PATH`. `--epochs` counts
+`--shuffle` / `--no-shuffle`, `--training-config PATH`,
+`--time-budget SECONDS`, and `--checkpoint-interval SECONDS`. `--epochs` counts
 passes between evaluations; the first evaluation makes no updates. Individual
 flags override an explicit settings file, which overrides checkpoint settings.
 Without a checkpoint, settings come from `ALLMENGINE_TRAINING_CONFIG` or the
 packaged `training.json`. Checkpoints restore model/settings only, not Adam state.
+
+For an unattended run, use `--time-budget 3300 --checkpoint-interval 60` and a
+large evaluation cap. This gives a cooperative 55-minute budget, saving the best
+evaluated weights about every minute and on exit, including Ctrl+C. An active
+evaluation cycle can overrun the limit. Saves atomically replace `--checkpoint`;
+updates since the last evaluation are discarded if time expires mid-training.
+A budget stop preserves a usable checkpoint but exits with code 1 (not converged).
+See [timed runs](allmengine/README.md#timed-runs-and-periodic-checkpoints) for a
+complete command and the timing details.
 See [the package guide](allmengine/README.md#gradient-pretraining-example) for
 pretraining and fine-tuning examples.
 

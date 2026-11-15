@@ -83,12 +83,15 @@ pass `training_config=TrainingConfig(...)` or a JSON path to `BinaryNetwork`.
   "learning_rate": 0.001,
   "batch_size": 64,
   "epochs": 10,
-  "shuffle": true
+  "shuffle": true,
+  "time_budget_seconds": 0,
+  "checkpoint_interval_seconds": 60
 }
 ```
 
 Both training modes accept `--training-config PATH`, `--learning-rate`,
-`--batch-size`, `--epochs`, and `--shuffle` / `--no-shuffle`. `epochs` means
+`--batch-size`, `--epochs`, `--shuffle` / `--no-shuffle`,
+`--time-budget SECONDS`, and `--checkpoint-interval SECONDS`. `epochs` means
 passes over the training corpus **between evaluations**. With 100 evaluations
 and 10 epochs, at most 990 epochs run: the first evaluation checks the initial
 model. `--seed` controls training shuffling and, in pretraining, data generation;
@@ -247,7 +250,7 @@ operations and operand range using `--operations add sub mul`, `--minimum`, and
 `--maximum`. Generation rejects unsupported results and fails clearly if it
 cannot fill the requested dataset. Power and matrix multiplication generation
 are currently unsupported. `--weights` initializes either training mode.
-The checkpoint is written at completion. Adam settings live in
+The checkpoint is written initially, periodically, and at completion. Adam settings live in
 `training.json`; dataset options belong to the pretraining CLI. Validation
 examples never enter gradient updates or checkpoint selection. Pretraining
 convergence means exact answers on the training corpus, not general arithmetic
@@ -266,3 +269,48 @@ integers; `forward(opcode, lhs, rhs)` retains the existing codec and decoder.
 The JSON checkpoint interface stays separate from the internal PyTorch module's
 tensor state dictionary. Install dependencies again after upgrading:
 `python -m pip install -e ./allmengine` from the repository root.
+
+### Timed runs and periodic checkpoints
+
+`--time-budget 3300` gives training a 55-minute budget. The default `0` means
+no time limit. `--checkpoint-interval 60` saves the best evaluated model about
+every minute to `--checkpoint`; the interval must be positive. The initial
+model is saved before its first evaluation, and the retained model is saved
+again at completion, on Ctrl+C, or on a training error. Saves use a temporary
+file in the destination directory and atomic replacement, so an interrupted
+write leaves the previous checkpoint intact. The destination directory must
+already exist. The standalone trainer requires `--checkpoint` to enable saves;
+the unified and pretraining CLIs provide default output paths.
+
+The budget is cooperative: it is checked while preparing targets, between
+minibatches, and between evaluation cycles. An evaluation cycle already running
+finishes, so the run can exceed the limit by that cycle and final save time.
+Pytest's separate `--timeout` still limits each worker. Pretraining counts dataset
+generation against the budget but finishes generation and the initial evaluation.
+Held-out validation is skipped if the budget has already expired; validation
+already in progress is allowed to finish. Checkpoint intervals can likewise be
+delayed by an evaluation cycle. Updates since the last completed evaluation are
+not retained if time expires mid-training: checkpoints always represent the best
+evaluated state (or the initial state if evaluation has not finished).
+
+Training stops at convergence, the evaluation cap, or the time limit, whichever
+comes first. Budget exhaustion still exits with code 1 because convergence was
+not reached; the checkpoint remains usable. `TrainingResult.stop_reason`
+distinguishes `converged`, `time_budget`, and `evaluation_budget`.
+
+```powershell
+$env:OMP_NUM_THREADS = "1"
+$env:MKL_NUM_THREADS = "1"
+.venv/Scripts/python.exe -m allmengine --pretrain `
+  --operations add sub mul --minimum -128 --maximum 127 `
+  --examples 50000 --validation-examples 10000 `
+  --learning-rate 0.001 --batch-size 256 --epochs 10 `
+  --max-evaluations 100000 --time-budget 3300 `
+  --checkpoint-interval 60 --seed 42 --checkpoint pretrained-relu.json
+```
+
+To continue later, add `--weights pretrained-relu.json`. Each invocation gets a
+fresh time budget. Checkpoints restore weights and settings, not Adam momentum,
+shuffle-generator state, elapsed time, or the observed pytest corpus. Both new
+settings follow the same JSON/environment/checkpoint/CLI precedence as other
+training settings. Older ReLU checkpoints without them use the defaults.

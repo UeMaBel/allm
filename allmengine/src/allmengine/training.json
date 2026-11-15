@@ -2,5 +2,7 @@
   "learning_rate": 0.001,
   "batch_size": 64,
   "epochs": 10,
-  "shuffle": true
+  "shuffle": true,
+  "time_budget_seconds": 0,
+  "checkpoint_interval_seconds": 60
 }

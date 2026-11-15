@@ -9,6 +9,7 @@ from .examples import generate_examples
 from .fitness import evaluate_operations
 from .gradient import train_gradients
 from .config import add_training_arguments, configure_training, training_overrides
+from .control import RunControl
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,10 @@ class Feedback:
 
 
 def pretrain(model, examples=100, validation_examples=50, operations=("add", "sub", "mul"),
-             minimum=-16, maximum=16, seed=0, max_evaluations=100):
+             minimum=-16, maximum=16, seed=0, max_evaluations=100, checkpoint=None):
+    if max_evaluations < 1:
+        raise ValueError("max_evaluations must be at least one")
+    control = RunControl(model.training_config, checkpoint)
     training = generate_examples(model.config, examples, operations, minimum, maximum, seed)
     validation = generate_examples(model.config, validation_examples, operations,
                                    minimum, maximum, seed + 1, exclude=training)
@@ -35,9 +39,12 @@ def pretrain(model, examples=100, validation_examples=50, operations=("add", "su
     def report(feedback):
         print(f"  Training fitness: {feedback.score:.4%}; exact accuracy: {feedback.accuracy:.4%}", flush=True)
     print(f"Pretraining: {len(training)} examples; {len(validation)} held-out examples", flush=True)
-    result = train_gradients(model, evaluate, score, report, random.Random(seed), max_evaluations)
-    held_out = evaluate_operations(model, [e.as_operation() for e in validation])
-    print(f"Validation fitness: {held_out.score:.4%}; exact accuracy: {held_out.accuracy:.4%}", flush=True)
+    result = train_gradients(model, evaluate, score, report, random.Random(seed), max_evaluations, control)
+    if control.expired:
+        print("Validation skipped: time budget exhausted", flush=True)
+    else:
+        held_out = evaluate_operations(model, [e.as_operation() for e in validation])
+        print(f"Validation fitness: {held_out.score:.4%}; exact accuracy: {held_out.accuracy:.4%}", flush=True)
     return result
 
 
@@ -59,8 +66,7 @@ def main():
         model.load_state_dict(json.loads(args.weights.read_text(encoding="utf-8")))
     configure_training(model, args.training_config, training_overrides(args))
     result = pretrain(model, args.examples, args.validation_examples, args.operations,
-                      args.minimum, args.maximum, args.seed, args.max_evaluations)
-    args.checkpoint.write_text(json.dumps(result.state, indent=2), encoding="utf-8")
+                      args.minimum, args.maximum, args.seed, args.max_evaluations, args.checkpoint)
     return 0 if result.converged else 1
 
 

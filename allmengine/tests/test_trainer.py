@@ -145,3 +145,14 @@ def test_missing_initial_weights_fail_without_fresh_training(experiment):
     with pytest.raises(FileNotFoundError):
         Trainer("candidate_model:Model", experiment,
                 weights=experiment / "missing.json").train(1)
+
+
+def test_pytest_budget_preserves_checkpoint_without_another_worker(experiment):
+    import json
+    checkpoint = experiment / "budget.json"
+    result = Trainer("candidate_model:Model", experiment,
+                     training_options={"time_budget_seconds": 1e-9,
+                                       "checkpoint_interval_seconds": 0.01}).train(10, checkpoint)
+    assert result.stop_reason == "time_budget"
+    assert result.evaluations == 1
+    assert json.loads(checkpoint.read_text()) == result.state == {"weight": 0}

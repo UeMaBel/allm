@@ -45,6 +45,10 @@ training passes between evaluations; `--learning-rate` and `--batch-size` tune
 Adam. Improvement and convergence are not guaranteed. `--weights PATH` loads
 a compatible ReLU checkpoint; legacy binary-activation weights need retraining.
 `--checkpoint` selects the output file, not an input checkpoint.
+Add `--time-budget 3300 --checkpoint-interval 60` for a cooperative 55-minute
+budget with periodic saves. Active evaluations may finish after the deadline.
+The best evaluated weights are saved atomically on exit, including Ctrl+C;
+checkpoints restore model settings and weights, not optimizer state.
 
 The tests already wrap inputs in `NeuralValue`, so no `--instrument` flag is
 needed. Add arithmetic cases to the `tests/*_cases.py` files or add pytest tests

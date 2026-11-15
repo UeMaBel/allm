@@ -8,6 +8,7 @@ from torch import nn
 from .fitness import operation_key
 from .result import TrainingResult
 from .targets import prepare_target, UnsupportedOperation
+from .control import RunControl
 
 
 class GradientOptimizer:
@@ -19,10 +20,12 @@ class GradientOptimizer:
         self.generator = torch.Generator(device="cpu").manual_seed(seed)
         self.loss = nn.BCEWithLogitsLoss()
 
-    def fit(self, operations):
+    def fit(self, operations, control=None):
         examples, excluded = [], Counter()
         distinct = {operation_key(op): op for op in operations}
         for operation in distinct.values():
+            if control is not None and not control.pulse():
+                return None
             try:
                 inputs, targets, _ = prepare_target(self.model, operation)
                 examples.append((inputs, targets))
@@ -40,6 +43,8 @@ class GradientOptimizer:
                      else torch.arange(len(inputs)))
             total = 0.0
             for indices in order.split(config.batch_size):
+                if control is not None and not control.pulse():
+                    return None
                 self.optimizer.zero_grad(set_to_none=True)
                 loss = self.loss(self.model.forward_logits(inputs[indices]), targets[indices])
                 if not torch.isfinite(loss):
@@ -50,7 +55,7 @@ class GradientOptimizer:
         return total / len(inputs)
 
 
-def train_gradients(model, evaluate, score, report, rng, max_evaluations):
+def train_gradients(model, evaluate, score, report, rng, max_evaluations, control=None):
     """Optimize continuously, retaining the best evaluated state on a shared corpus.
 
     Each evaluation after the initial one follows ``epochs`` supervised passes.
@@ -59,30 +64,42 @@ def train_gradients(model, evaluate, score, report, rng, max_evaluations):
     """
     if max_evaluations < 1:
         raise ValueError("max_evaluations must be at least one")
-    print(f"Evaluation 1/{max_evaluations} (initial model)", flush=True)
-    best = evaluate(model)
-    report(best)
-    corpus = {operation_key(op): op for op in best.operations}
+    control = control or RunControl(model.training_config)
     best_state = model.state_dict()
-    incumbent = deepcopy(model)
-    optimizer = GradientOptimizer(model, rng.randrange(2**63))
-    evaluations = 1
-    while not best.success and evaluations < max_evaluations:
-        loss = optimizer.fit(corpus.values())
-        print(f"Evaluation {evaluations + 1}/{max_evaluations}; training BCE: {loss:.6f}", flush=True)
-        candidate = evaluate(model)
-        previous_count = len(corpus)
-        corpus.update((operation_key(op), op) for op in candidate.operations)
-        if len(corpus) > previous_count:
-            print(f"  Shared operation corpus expanded: {previous_count} -> {len(corpus)} calls", flush=True)
-        candidate = score(model, candidate, corpus.values())
-        incumbent.load_state_dict(best_state)
-        best = score(incumbent, best, corpus.values())
-        report(candidate)
-        evaluations += 1
-        if candidate.success or (candidate.accuracy, candidate.score) >= (best.accuracy, best.score):
-            best, best_state = candidate, model.state_dict()
-    model.load_state_dict(best_state)
-    print(f"Training finished: {'converged' if best.success else 'evaluation budget exhausted'}; "
-          f"{evaluations} evaluations; retained operation fitness: {best.score:.4%}", flush=True)
-    return TrainingResult(best.success, evaluations, best, best_state)
+    control.retain(best_state)
+    try:
+        print(f"Evaluation 1/{max_evaluations} (initial model)", flush=True)
+        best = evaluate(model)
+        report(best)
+        corpus = {operation_key(op): op for op in best.operations}
+        best_state = model.state_dict()
+        incumbent = deepcopy(model)
+        optimizer = GradientOptimizer(model, rng.randrange(2**63))
+        evaluations = 1
+        while not best.success and evaluations < max_evaluations and control.pulse():
+            loss = optimizer.fit(corpus.values(), control)
+            if loss is None or control.expired:
+                break
+            print(f"Evaluation {evaluations + 1}/{max_evaluations}; training BCE: {loss:.6f}", flush=True)
+            candidate = evaluate(model)
+            previous_count = len(corpus)
+            corpus.update((operation_key(op), op) for op in candidate.operations)
+            if len(corpus) > previous_count:
+                print(f"  Shared operation corpus expanded: {previous_count} -> {len(corpus)} calls", flush=True)
+            candidate = score(model, candidate, corpus.values())
+            incumbent.load_state_dict(best_state)
+            best = score(incumbent, best, corpus.values())
+            report(candidate)
+            evaluations += 1
+            if candidate.success or (candidate.accuracy, candidate.score) >= (best.accuracy, best.score):
+                best, best_state = candidate, model.state_dict()
+            control.retain(best_state)
+        reason = control.reason(best.success)
+        status = "converged" if best.success else f"{reason.replace('_', ' ')} exhausted"
+        print(f"Training finished: {status}; "
+              f"{evaluations} evaluations; retained operation fitness: {best.score:.4%}", flush=True)
+        return TrainingResult(best.success, evaluations, best, best_state, reason)
+    finally:
+        model.load_state_dict(best_state)
+        control.retain(best_state)
+        control.save(force=True)

@@ -52,15 +52,13 @@ def main():
             else:
                 parser.error('--train requires a pytest command, e.g. "pytest allmtest/tests"')
             from .trainer import Trainer
-            import json
             result = Trainer(args.factory, Path.cwd(), pytest_args=command,
                              timeout=args.timeout, instrument=args.package, weights=args.weights,
                              seed=args.seed, training_config=args.training_config,
-                             training_options=training_overrides(args)).train(args.max_evaluations)
-            args.checkpoint.write_text(json.dumps(result.state, indent=2), encoding="utf-8")
+                             training_options=training_overrides(args)).train(args.max_evaluations, args.checkpoint)
             print(f"converged={result.converged} evaluations={result.evaluations} "
                   f"passed={result.feedback.passed} failed={result.feedback.failed} "
-                  f"checkpoint={args.checkpoint}")
+                  f"checkpoint={args.checkpoint} stop_reason={result.stop_reason}")
             return 0 if result.converged else 1
         if not command:
             parser.error("--run requires a Python script or module")

@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 import sys
 
@@ -70,11 +70,13 @@ def test_pretrain_cli_writes_relu_checkpoint_with_overridden_settings(model, tmp
     monkeypatch.setattr(sys, "argv", ["pretrain", "--examples", "6", "--validation-examples", "2",
                                     "--minimum", "-2", "--maximum", "1", "--operations", "add",
                                     "--epochs", "2", "--batch-size", "3", "--learning-rate", "0.02",
-                                    "--no-shuffle", "--max-evaluations", "2", "--checkpoint", str(checkpoint)])
+                                    "--no-shuffle", "--time-budget", "0", "--checkpoint-interval", "0.01",
+                                    "--max-evaluations", "2", "--checkpoint", str(checkpoint)])
     assert main() in (0, 1)
     state = json.loads(checkpoint.read_text())
     assert state["model_type"] == BinaryNetwork.MODEL_TYPE
-    assert state["training_config"] == dict(learning_rate=0.02, batch_size=3, epochs=2, shuffle=False)
+    assert state["training_config"] == asdict(TrainingConfig(learning_rate=0.02, batch_size=3, epochs=2,
+                                                           shuffle=False, checkpoint_interval_seconds=0.01))
     model.load_state_dict(state)
 
 

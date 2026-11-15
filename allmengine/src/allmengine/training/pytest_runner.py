@@ -21,6 +21,7 @@ from .fitness import evaluate_operations, operation_key
 from ..constants import OpCode
 from .search import search
 from .gradient import train_gradients
+from .control import RunControl
 from .config import add_training_arguments, configure_training, training_overrides
 from ..network import BinaryNetwork
 
@@ -208,7 +209,7 @@ class Trainer:
             corpus = {operation_key(op): op for op in operations}
             return self._score_operations(model, feedback, corpus.values())
 
-    def train(self, max_evaluations=100):
+    def train(self, max_evaluations=100, checkpoint=None):
         if max_evaluations < 1:
             raise ValueError("max_evaluations must be at least one")
         print(f"Starting training: {self.factory}", flush=True)
@@ -221,7 +222,8 @@ class Trainer:
             # Load before evaluation or optimization, including saved settings.
             model.load_state_dict(json.loads(self.weights.read_text(encoding="utf-8")))
             print(f"  Initial weights: {self.weights}", flush=True)
-        configure_training(model, self.training_config, self.training_options)
+        run_config = configure_training(model, self.training_config, self.training_options)
+        control = RunControl(run_config, checkpoint)
         training_config = getattr(model, "training_config", None)
         if training_config is not None:
             print(f"  Adam learning rate: {training_config.learning_rate}; "
@@ -230,7 +232,7 @@ class Trainer:
         alu.set_model(model)
         optimize = train_gradients if isinstance(model, BinaryNetwork) else search
         return optimize(model, self.evaluate, self._score_operations,
-                      self._print_feedback, self.rng, max_evaluations)
+                      self._print_feedback, self.rng, max_evaluations, control)
 
     @staticmethod
     def _score_operations(model, feedback, operations):
@@ -314,11 +316,9 @@ def main():
     result = Trainer(args.factory, args.project, timeout=args.timeout,
                      seed=args.seed, instrument=args.instrument, weights=args.weights,
                      training_config=args.training_config,
-                     training_options=training_overrides(args)).train(args.max_evaluations)
-    if args.checkpoint:
-        args.checkpoint.write_text(json.dumps(result.state, indent=2), encoding="utf-8")
+                     training_options=training_overrides(args)).train(args.max_evaluations, args.checkpoint)
     print(f"converged={result.converged} evaluations={result.evaluations} "
-          f"passed={result.feedback.passed} failed={result.feedback.failed}")
+          f"passed={result.feedback.passed} failed={result.feedback.failed} stop_reason={result.stop_reason}")
     return 0 if result.converged else 1
 
 

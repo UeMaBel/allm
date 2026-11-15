@@ -8,3 +8,4 @@ class TrainingResult:
     evaluations: int
     feedback: object
     state: dict
+    stop_reason: str = "evaluation_budget"
