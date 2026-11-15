@@ -1,34 +1,8 @@
 """Single execution boundary for the shared neural network."""
-from enum import Enum
 import operator
 from typing import Any, Protocol
 
-
-class OpCode(str, Enum):
-    ADD = "add"
-    SUB = "sub"
-    MUL = "mul"
-    TRUEDIV = "truediv"
-    FLOORDIV = "floordiv"
-    MOD = "mod"
-    POW = "pow"
-    MATMUL = "matmul"
-    LSHIFT = "lshift"
-    RSHIFT = "rshift"
-    AND = "and_"
-    OR = "or_"
-    XOR = "xor"
-    LT = "lt"
-    LE = "le"
-    EQ = "eq"
-    NE = "ne"
-    GT = "gt"
-    GE = "ge"
-    NEG = "neg"
-    POS = "pos"
-    ABS = "abs"
-    INVERT = "invert"
-    BOOL = "bool"
+from .constants import OpCode
 
 
 class NetworkModel(Protocol):

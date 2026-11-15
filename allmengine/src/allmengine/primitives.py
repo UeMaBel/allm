@@ -1,5 +1,6 @@
 """Python operator adapters. No arithmetic is implemented here."""
-from .cpu import OpCode, alu
+from .constants import BINARY_NAMES, COMPARISON_NAMES, UNARY_NAMES, OpCode
+from .cpu import alu
 
 
 class NeuralValue:
@@ -43,14 +44,13 @@ def _unary(opcode):
 
 
 # Comparisons return wrappers: `if a < b` executes LT followed by BOOL.
-for _name in ("add", "sub", "mul", "truediv", "floordiv", "mod", "pow",
-              "matmul", "lshift", "rshift", "and", "or", "xor"):
+for _name in BINARY_NAMES:
     if _name != "pow":
         setattr(NeuralValue, f"__{_name}__", _binary(OpCode[_name.upper()]))
     setattr(NeuralValue, f"__r{_name}__", _binary(OpCode[_name.upper()], True))
 
-for _name in ("lt", "le", "eq", "ne", "gt", "ge"):
+for _name in COMPARISON_NAMES:
     setattr(NeuralValue, f"__{_name}__", _binary(OpCode[_name.upper()]))
 
-for _name in ("neg", "pos", "abs", "invert"):
+for _name in UNARY_NAMES:
     setattr(NeuralValue, f"__{_name}__", _unary(OpCode[_name.upper()]))

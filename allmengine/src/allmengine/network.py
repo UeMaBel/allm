@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import random
 
-from .cpu import OpCode
+from .constants import OPCODE_IDS, PREDICATES, OpCode
 
 
 @dataclass(frozen=True)
@@ -47,16 +47,6 @@ class NetworkConfig:
         path = path or os.environ.get("ALLMENGINE_NETWORK_CONFIG")
         path = Path(path) if path else Path(__file__).with_name("network.json")
         return cls(**json.loads(path.read_text(encoding="utf-8")))
-
-
-# Explicit stable IDs: adding an operation must not renumber existing checkpoints.
-OPCODE_IDS = {OpCode(name): index for index, name in enumerate((
-    "add", "sub", "mul", "truediv", "floordiv", "mod", "pow", "matmul",
-    "lshift", "rshift", "and_", "or_", "xor", "lt", "le", "eq", "ne",
-    "gt", "ge", "neg", "pos", "abs", "invert", "bool",
-))}
-PREDICATES = {OpCode.LT, OpCode.LE, OpCode.EQ, OpCode.NE,
-              OpCode.GT, OpCode.GE, OpCode.BOOL}
 
 
 def _bits(value, width):
