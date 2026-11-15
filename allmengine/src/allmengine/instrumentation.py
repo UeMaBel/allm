@@ -1,4 +1,15 @@
-"""Opt-in source instrumentation for application modules imported after enable()."""
+"""Opt-in source instrumentation for application modules imported after enable().
+
+How it works:
+1. enable() installs an import hook for the selected packages.
+2. The loader parses each imported module into an abstract syntax tree (AST).
+3. _Transform replaces operators with calls to the runtime helpers below.
+   For example, a + b becomes runtime._binary("add", a, b).
+4. Python compiles and runs the transformed tree; source files stay unchanged.
+
+The helpers run when application code executes. The AST visitor runs earlier,
+while that code is being imported.
+"""
 import ast
 import importlib.abc
 import importlib.machinery
@@ -17,24 +28,28 @@ def _numeric(value):
 
 
 def _binary(name, left, right):
+    """Evaluate a two-operand operation, retaining native behavior for objects."""
     if _numeric(left) and _numeric(right):
         return alu.execute(OpCode(name), left, right)
     return getattr(operator, name)(left, right)
 
 
 def _inplace(name, left, right):
+    """Handle += and similar operations, including native in-place mutation."""
     if _numeric(left) and _numeric(right):
         return alu.execute(OpCode(name), left, right)
     return getattr(operator, "i" + name.rstrip("_"))(left, right)
 
 
 def _unary(name, value):
+    """Evaluate a one-operand operation such as -value or ~value."""
     if _numeric(value):
         return alu.execute(OpCode(name), value)
     return getattr(operator, name)(value)
 
 
 def _truth(value):
+    """Route numeric truth checks through the ALU; use Python bool for objects."""
     if _numeric(value):
         result = alu.execute(OpCode.BOOL, value)
         if type(result) is not bool:
@@ -53,11 +68,13 @@ class _TruthValue:
 
 
 class _CompareOperand:
+    """Intercept comparisons while Python keeps its normal chained-comparison rules."""
     def __init__(self, value):
         self.value = value
 
 
 def _comparison(name):
+    """Build one comparison method, such as __lt__, for wrapped operands."""
     def compare(self, other):
         return _TruthValue(_binary(name, self.value, other.value))
     return compare
@@ -68,6 +85,7 @@ for _name in COMPARISON_AST_OPS.values():
 
 
 class _AugmentedTarget:
+    """Remember an attribute/item target and read it before the right side runs."""
     def __init__(self, owner, key, attribute):
         self.owner, self.key, self.attribute = owner, key, attribute
         self.value = getattr(owner, key) if attribute else owner[key]
@@ -81,11 +99,18 @@ class _AugmentedTarget:
 
 
 class _Transform(ast.NodeTransformer):
+    """Replace supported syntax with runtime calls.
+
+    Python dispatches each AST node to its visit_<NodeType> method. self.visit()
+    transforms a child; generic_visit() traverses children automatically.
+    copy_location() preserves source positions for errors and tracebacks.
+    """
     def __init__(self, alias):
         self.alias = alias
         self.class_name = ""
 
     def visit_ClassDef(self, node):
+        # Track the enclosing class for private attributes such as self.__value.
         previous = self.class_name
         self.class_name = node.name.lstrip("_")
         try:
@@ -94,10 +119,12 @@ class _Transform(ast.NodeTransformer):
             self.class_name = previous
 
     def call(self, method, *args):
+        """Build an AST call to a runtime helper; args are AST nodes, not values."""
         return ast.Call(ast.Attribute(ast.Name(self.alias, ast.Load()), method, ast.Load()),
                         list(args), [])
 
     def _compare(self, node):
+        """Wrap operands so Python evaluates comparison chains and middle values once."""
         return ast.Compare(self.call("_CompareOperand", self.visit(node.left)), node.ops,
                            [self.call("_CompareOperand", self.visit(value))
                             for value in node.comparators])
@@ -114,16 +141,19 @@ class _Transform(ast.NodeTransformer):
         return ast.copy_location(self.call("_truth", self.visit(node)), node)
 
     def visit_BinOp(self, node):
+        """Rewrite a + b as runtime._binary("add", a, b), and likewise for other operators."""
         return ast.copy_location(self.call("_binary", ast.Constant(BINARY_AST_OPS[type(node.op)]),
                                            self.visit(node.left), self.visit(node.right)), node)
 
     def visit_UnaryOp(self, node):
+        """Rewrite unary operators; not uses a truth check rather than an ALU opcode."""
         if isinstance(node.op, ast.Not):
             return ast.copy_location(ast.UnaryOp(ast.Not(), self.condition(node.operand)), node)
         return ast.copy_location(self.call("_unary", ast.Constant(UNARY_AST_OPS[type(node.op)]),
                                            self.visit(node.operand)), node)
 
     def visit_BoolOp(self, node):
+        """Keep and/or lazy, then unwrap the selected operand to return its original value."""
         selected = ast.BoolOp(node.op, [self.call("_TruthValue", self.visit(v)) for v in node.values])
         return ast.copy_location(ast.Attribute(selected, "value", ast.Load()), node)
 
@@ -154,19 +184,23 @@ class _Transform(ast.NodeTransformer):
         node.orelse = [self.visit(stmt) for stmt in node.orelse]
         return node
 
+    # if and while have the same test/body/orelse fields.
     visit_While = visit_If
 
     def visit_IfExp(self, node):
+        """Transform the condition and both branches of: yes if condition else no."""
         return ast.copy_location(ast.IfExp(self.condition(node.test), self.visit(node.body),
                                            self.visit(node.orelse)), node)
 
     def visit_Assert(self, node):
+        """Transform the assertion test and message while leaving message evaluation lazy."""
         node.test = self.condition(node.test)
         if node.msg:
             node.msg = self.visit(node.msg)
         return node
 
     def visit_comprehension(self, node):
+        """Transform the iterable and if filters in list/set/dict comprehensions and generators."""
         node.iter = self.visit(node.iter)
         node.ifs = [self.condition(value) for value in node.ifs]
         return node
@@ -180,6 +214,9 @@ class _Transform(ast.NodeTransformer):
         return node
 
     def visit_AugAssign(self, node):
+        # x += y becomes x = _inplace("add", x, y).
+        # For obj.attr or obj[key], capture the owner/key and old value once,
+        # before evaluating y, then write the result back through apply().
         name = ast.Constant(BINARY_AST_OPS[type(node.op)])
         right = self.visit(node.value)
         if isinstance(node.target, ast.Name):
@@ -188,6 +225,7 @@ class _Transform(ast.NodeTransformer):
         if isinstance(node.target, ast.Attribute):
             owner = self.visit(node.target.value)
             attr = node.target.attr
+            # AST string arguments do not get Python's automatic private-name mangling.
             if self.class_name and attr.startswith("__") and not attr.endswith("__"):
                 attr = "_" + self.class_name + attr
             key = ast.Constant(attr)
@@ -201,6 +239,7 @@ class _Transform(ast.NodeTransformer):
         return ast.copy_location(ast.Expr(call), node)
 
     def _slice(self, node):
+        """Turn subscript syntax such as a:b or a:b, c into runtime key expressions."""
         if isinstance(node, ast.Slice):
             # Avoid reliance on an application name `slice`, which may be shadowed.
             return self.call("_slice", *(self.visit(v) if v is not None else ast.Constant(None)
@@ -214,8 +253,10 @@ _slice = slice
 
 
 def _compile(source, filename):
+    """Parse, rewrite, and compile a module without changing its source file."""
     tree = ast.parse(source, filename)
     # A single leading underscore avoids class-private name mangling.
+    # Choose an import alias that does not collide with application names.
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
     names.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
     names.update(node.name for node in ast.walk(tree)
@@ -229,6 +270,7 @@ def _compile(source, filename):
         alias += "_"
     tree = _Transform(alias).visit(tree)
     runtime_import = ast.Import([ast.alias("allmengine.instrumentation", alias)])
+    # Preserve the module docstring and the required placement of future imports.
     position = 0
     if tree.body and isinstance(tree.body[0], ast.Expr) and isinstance(tree.body[0].value, ast.Constant) \
             and isinstance(tree.body[0].value.value, str):
@@ -237,6 +279,7 @@ def _compile(source, filename):
             and tree.body[position].module == "__future__":
         position += 1
     tree.body.insert(position, runtime_import)
+    # Supply positions for newly created nodes before handing the tree to Python.
     ast.fix_missing_locations(tree)
     return compile(tree, filename, "exec")
 
@@ -254,6 +297,7 @@ class Instrumentation(importlib.abc.MetaPathFinder):
         self.packages = packages
 
     def find_spec(self, fullname, path=None, target=None):
+        """Find selected modules normally, then replace their loader with our rewriting loader."""
         if not any(fullname == name or fullname.startswith(name + ".") for name in self.packages):
             return None
         spec = importlib.machinery.PathFinder.find_spec(fullname, path)
@@ -265,6 +309,7 @@ class Instrumentation(importlib.abc.MetaPathFinder):
         return spec
 
     def close(self):
+        """Stop rewriting future imports; already imported code stays transformed."""
         if self in sys.meta_path:
             sys.meta_path.remove(self)
 
@@ -283,6 +328,8 @@ def enable(*packages):
     """
     if not packages:
         raise ValueError("Select at least one application package or module")
+    # Rewriting the engine itself could recursively call the ALU. Keep Python
+    # internals and the test runner outside the selected application packages.
     blocked = set(sys.stdlib_module_names) | {"allmengine", "pytest", "_pytest"}
     for name in packages:
         if not isinstance(name, str) or not all(part.isidentifier() and not keyword.iskeyword(part)
@@ -297,5 +344,6 @@ def enable(*packages):
                 for selected in hook.packages) for hook in sys.meta_path):
             raise ValueError(f"Instrumentation already enabled for {name}")
     hook = Instrumentation(tuple(packages))
+    # Run before the default finder so selected modules use our source loader.
     sys.meta_path.insert(0, hook)
     return hook
